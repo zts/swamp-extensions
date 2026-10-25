@@ -99,6 +99,18 @@ Deno.test("random throws on a malformed body and writes nothing", async () => {
   assertEquals(getWrittenResources().length, 0);
 });
 
+Deno.test("random refuses an image URL that is not http(s)", async () => {
+  const { run, getWrittenResources } = runRandom();
+  await withMockedFetch(
+    [Response.json({ ...CAT, url: "javascript:alert(1)" })],
+    async () => {
+      await assertRejects(run, Error, "not an http(s) URL: javascript:");
+    },
+  );
+
+  assertEquals(getWrittenResources().length, 0);
+});
+
 Deno.test("random names the endpoint when the body is not JSON", async () => {
   const { run, getWrittenResources } = runRandom();
   await withMockedFetch([new Response("<html>oops</html>")], async () => {

@@ -24,7 +24,9 @@ const CatSchema = z.object({
   id: z.string().min(1).describe("The cat's cataas id"),
   tags: z.array(z.string()).describe("Tags cataas has for the cat"),
   createdAt: z.string().min(1).describe("When the cat was added to cataas"),
-  url: z.url().describe("Absolute URL of the cat's image"),
+  url: z.url({ protocol: /^https?$/ }).describe(
+    "Absolute http(s) URL of the cat's image",
+  ),
   mimetype: z.string().min(1).describe("The image's MIME type"),
 });
 
@@ -68,11 +70,18 @@ export async function fetchRandomCat(
     );
   }
   const cat = parsed.data;
+  const url = new URL(cat.url, CATAAS_URL);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(
+      `cataas GET ${endpoint} returned an image URL that is not an http(s) ` +
+        `URL: ${url.protocol}`,
+    );
+  }
   return {
     id: cat.id,
     tags: cat.tags,
     createdAt: cat.created_at,
-    url: new URL(cat.url, CATAAS_URL).href,
+    url: url.href,
     mimetype: cat.mimetype,
   };
 }
