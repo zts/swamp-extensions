@@ -11,6 +11,9 @@ export const CATAAS_URL = "https://cataas.com";
 /** How long a request to cataas may take before it is abandoned. */
 export const REQUEST_TIMEOUT_MS = 10_000;
 
+// Statuses that mean "try again later", not "this request is wrong".
+const TRANSIENT_STATUSES = new Set([429, 503]);
+
 // Not strict on purpose: an extra field upstream must not break every run.
 const CatResponseSchema = z.object({
   id: z.string().min(1),
@@ -49,6 +52,14 @@ export async function fetchRandomCat(
   });
   if (!response.ok) {
     const body = (await response.text()).slice(0, 200);
+    if (TRANSIENT_STATUSES.has(response.status)) {
+      const retryAfter = response.headers.get("Retry-After")?.slice(0, 200);
+      const wait = retryAfter ? ` (Retry-After: ${retryAfter})` : "";
+      throw new Error(
+        `cataas GET ${endpoint} returned HTTP ${response.status}, a ` +
+          `transient failure; retry later${wait}: ${body}`,
+      );
+    }
     throw new Error(
       `cataas GET ${endpoint} failed with HTTP ${response.status}: ${body}`,
     );
@@ -70,6 +81,12 @@ export async function fetchRandomCat(
     );
   }
   const cat = parsed.data;
+  if (!URL.canParse(cat.url, CATAAS_URL)) {
+    throw new Error(
+      `cataas GET ${endpoint} returned an image URL that cannot be parsed: ` +
+        cat.url.slice(0, 200),
+    );
+  }
   const url = new URL(cat.url, CATAAS_URL);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(

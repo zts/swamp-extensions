@@ -83,8 +83,70 @@ Deno.test("random ignores fields cataas adds later", async () => {
 Deno.test("random throws on an HTTP error and writes nothing", async () => {
   const { run, getWrittenResources } = runRandom();
   await withMockedFetch([new Response("down", { status: 500 })], async () => {
-    await assertRejects(run, Error, "HTTP 500: down");
+    const error = await assertRejects(run, Error, "HTTP 500: down");
+    assertEquals(error.message.includes("retry later"), false);
   });
+
+  assertEquals(getWrittenResources().length, 0);
+});
+
+Deno.test("random says a 429 is transient, with Retry-After", async () => {
+  const { run, getWrittenResources } = runRandom();
+  const limited = new Response("slow down", {
+    status: 429,
+    headers: { "Retry-After": "30" },
+  });
+  await withMockedFetch([limited], async () => {
+    await assertRejects(
+      run,
+      Error,
+      `cataas GET ${ENDPOINT} returned HTTP 429, a transient failure; ` +
+        "retry later (Retry-After: 30): slow down",
+    );
+  });
+
+  assertEquals(getWrittenResources().length, 0);
+});
+
+Deno.test("random passes an HTTP-date Retry-After through as sent", async () => {
+  const { run } = runRandom();
+  const when = "Wed, 21 Oct 2026 07:28:00 GMT";
+  const limited = new Response("", {
+    status: 429,
+    headers: { "Retry-After": when },
+  });
+  await withMockedFetch([limited], async () => {
+    await assertRejects(run, Error, `(Retry-After: ${when})`);
+  });
+});
+
+Deno.test("random says a 503 is transient, without Retry-After", async () => {
+  const { run, getWrittenResources } = runRandom();
+  await withMockedFetch([new Response("busy", { status: 503 })], async () => {
+    const error = await assertRejects(
+      run,
+      Error,
+      "HTTP 503, a transient failure; retry later: busy",
+    );
+    assertEquals(error.message.includes("Retry-After"), false);
+  });
+
+  assertEquals(getWrittenResources().length, 0);
+});
+
+Deno.test("random names an image URL that cannot be parsed", async () => {
+  const { run, getWrittenResources } = runRandom();
+  await withMockedFetch(
+    [Response.json({ ...CAT, url: "http://" })],
+    async () => {
+      await assertRejects(
+        run,
+        Error,
+        `cataas GET ${ENDPOINT} returned an image URL that cannot be parsed: ` +
+          "http://",
+      );
+    },
+  );
 
   assertEquals(getWrittenResources().length, 0);
 });
