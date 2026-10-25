@@ -106,8 +106,15 @@ export async function fetchRandomCat(
 /** Behavior definition for fetching random cats from cataas. */
 export const behavior = {
   type: "@zts/cataas",
-  version: "2026.10.25.1",
+  version: "2026.10.25.2",
   globalArguments: z.object({}),
+  upgrades: [
+    {
+      toVersion: "2026.10.25.2",
+      description: "Clearer error messages; no global argument changes",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   resources: {
     "cat": {
       description: "A random cat from cataas",
