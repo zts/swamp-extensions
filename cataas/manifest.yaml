@@ -1,0 +1,20 @@
+manifestVersion: 1
+name: "@zts/cataas"
+version: "2026.10.25.1"
+license: MIT
+repository: https://github.com/zts/swamp-extensions
+description: >-
+  Fetch random cats from Cat as a Service (cataas.com). The random method
+  records a cat's id, tags, image URL, MIME type and creation time as swamp
+  data, for demos, dashboards and anything that needs a cat.
+paths:
+  base: manifest
+behaviors:
+  - cataas.ts
+additionalFiles:
+  - README.md
+  - LICENSE.txt
+labels:
+  - cataas
+  - cats
+  - example
