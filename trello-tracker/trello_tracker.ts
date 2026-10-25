@@ -107,12 +107,14 @@ const ActionSchema = z.object({
   memberCreator: z.object({ username: z.string() }).optional(),
 });
 
-type FailureKind =
-  | "auth"
-  | "not_found"
-  | "rate_limited"
-  | "invalid"
-  | "upstream";
+const FAILURE_KINDS = [
+  "auth",
+  "not_found",
+  "rate_limited",
+  "invalid",
+  "upstream",
+] as const;
+type FailureKind = typeof FAILURE_KINDS[number];
 
 /** A failure every tracker reports the same way: one of five kinds. */
 class Failure extends Error {
@@ -574,27 +576,42 @@ async function perform(
     }
     default: {
       const type = relationType!;
-      const fromCard = await board.card(text("issue"));
-      let toCard: Card;
-      try {
-        toCard = await board.card(text("to"));
-      } catch (error) {
-        if (
-          operation !== "unrelate" || !(error instanceof Failure) ||
-          error.kind !== "not_found"
-        ) throw error;
-        // The other card is gone or off the board: remove this card's side
-        // by the id or display it was stored under, or the relation could
-        // never be removed.
-        const ref = text("to").toLowerCase();
-        const stored = await relations.read(fromCard.id);
+      // unrelate tolerates one card being gone or off the board, so a
+      // relation to it can still be removed.
+      const lookup = async (ref: string) => {
+        try {
+          return await board.card(ref);
+        } catch (error) {
+          if (
+            operation === "unrelate" && error instanceof Failure &&
+            error.kind === "not_found"
+          ) return error;
+          throw error;
+        }
+      };
+      const fromCard = await lookup(text("issue"));
+      if (fromCard instanceof Failure && operation !== "unrelate") {
+        throw fromCard;
+      }
+      const toCard = await lookup(text("to"));
+      if (fromCard instanceof Failure && toCard instanceof Failure) {
+        throw fromCard;
+      }
+      if (fromCard instanceof Failure || toCard instanceof Failure) {
+        // Remove the surviving card's side by the id or display the gone
+        // card was stored under.
+        const [card, gone, direction, missing] = toCard instanceof Failure
+          ? [fromCard as Card, text("to"), "outgoing" as const, toCard]
+          : [toCard, text("issue"), "incoming" as const, fromCard as Failure];
+        const ref = gone.toLowerCase();
+        const stored = await relations.read(card.id);
         const kept = stored.filter((r) =>
-          !(r.type === type && r.direction === "outgoing" &&
+          !(r.type === type && r.direction === direction &&
             (r.issue.toLowerCase() === ref ||
               r.display.toLowerCase() === ref))
         );
-        if (kept.length === stored.length) throw error;
-        await relations.write(fromCard.id, kept);
+        if (kept.length === stored.length) throw missing;
+        await relations.write(card.id, kept);
         return { changed: true };
       }
       const from = {
@@ -652,7 +669,21 @@ async function perform(
   }
 }
 
-const AnswerSchema = z.object({ ok: z.boolean() }).passthrough();
+const AnswerSchema = z.discriminatedUnion("ok", [
+  z.object({
+    operation: z.string(),
+    run: z.string().optional(),
+    ok: z.literal(true),
+    result: z.record(z.string(), z.unknown()),
+  }).strict(),
+  z.object({
+    operation: z.string(),
+    run: z.string().optional(),
+    ok: z.literal(false),
+    kind: z.enum(FAILURE_KINDS),
+    detail: z.string(),
+  }).strict(),
+]);
 
 /** The Trello tracker: a stagecraft tracker that keeps tickets on a board. */
 export const behavior = {

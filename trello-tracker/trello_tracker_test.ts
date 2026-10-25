@@ -19,7 +19,7 @@ const CARD = "5f5f5f5f0000000000000c01";
 const CARD_2 = "5f5f5f5f0000000000000c02";
 const CARD_3 = "5f5f5f5f0000000000000c03";
 const FOREIGN = "5f5f5f5f0000000000000c99";
-const GONE = "5f5f5f5f0000000000000dead";
+const GONE = "5f5f5f5f000000000000dead";
 
 interface FakeCard {
   id: string;
@@ -214,6 +214,7 @@ function tracker(stored: Record<string, Record<string, unknown>> = {}) {
       w.name === answer
     );
     assertEquals(written.length, 1, `one answer for ${operation}`);
+    behavior.resources.answer.schema.parse(written[0].data);
     return written[0].data as Record<string, unknown>;
   };
   return { ...testContext, operate };
@@ -638,6 +639,23 @@ Deno.test("an operation the tracker does not offer is invalid", async () => {
   assertEquals(answer.kind, "invalid");
 });
 
+Deno.test("the answer schema holds a result or a failure, not both or neither", () => {
+  const schema = behavior.resources.answer.schema;
+  const ok = { operation: "comment", ok: true, result: { id: "a" } };
+  const failed = {
+    operation: "comment",
+    run: "run-1",
+    ok: false,
+    kind: "not_found",
+    detail: "no ticket",
+  };
+  assertEquals(schema.safeParse(ok).success, true);
+  assertEquals(schema.safeParse(failed).success, true);
+  assertEquals(schema.safeParse({ ...ok, result: undefined }).success, false);
+  assertEquals(schema.safeParse({ ...failed, kind: "oops" }).success, false);
+  assertEquals(schema.safeParse({ ...ok, kind: "auth" }).success, false);
+});
+
 // --- relations ----------------------------------------------------------------
 
 function relationsOf(
@@ -826,6 +844,47 @@ for (const [what, to] of [["id", GONE], ["display id", "TRELLO-77"]]) {
     }]);
   });
 }
+
+for (const [what, issue] of [["id", GONE], ["display id", "trello-77"]]) {
+  Deno.test(`unrelate removes a relation from a gone card by its ${what}`, async () => {
+    const fake = new FakeTrello();
+    const { operate, getWrittenResources } = tracker({
+      [`relations-${CARD_2}`]: {
+        card: CARD_2,
+        relations: [{
+          type: "parent_of",
+          direction: "incoming",
+          issue: GONE,
+          display: "trello-77",
+        }],
+      },
+    });
+    const answer = await run(
+      fake,
+      () => operate("unrelate", { issue, type: "parent_of", to: CARD_2 }),
+    );
+    assertEquals(answer.result, { changed: true });
+    assertEquals(relationsOf(getWrittenResources(), CARD_2), []);
+    // The orphaned child can take a new parent again.
+    const relate = await run(
+      fake,
+      () => operate("relate", { issue: CARD, type: "parent_of", to: CARD_2 }),
+    );
+    assertEquals(relate.result, { changed: true });
+  });
+}
+
+Deno.test("unrelate between two gone cards is not_found", async () => {
+  const fake = new FakeTrello();
+  const { operate, getWrittenResources } = tracker();
+  const answer = await run(
+    fake,
+    () =>
+      operate("unrelate", { issue: GONE, type: "related_to", to: "trello-78" }),
+  );
+  assertEquals(answer.kind, "not_found");
+  assertEquals(getWrittenResources().length, 1);
+});
 
 Deno.test("unrelate from a gone card it holds no relation to is not_found", async () => {
   const fake = new FakeTrello();

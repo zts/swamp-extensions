@@ -97,6 +97,10 @@ swamp workflow run @swamp/stagecraft/conformance --input tracker=trello-pub \
 - **Relations live in swamp, not Trello.** Trello has no card-to-card links, so
   relations are kept in this tracker's swamp data and are not visible on the
   board. They are as durable as your swamp datastore.
+- **Unrelating a card that is gone.** When one card of a relation is deleted
+  or moved off the board, `unrelate` still removes the surviving card's side.
+  Name the gone card by its id or display id (`trello-77`); its shortLink
+  cannot be resolved once the card is gone.
 - **A timed-out write can be repeated.** Trello has no idempotency keys: if a
   comment or a new card is made but the answer is lost to a timeout, the retry
   makes it again.
