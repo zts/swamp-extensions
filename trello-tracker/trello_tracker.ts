@@ -575,7 +575,28 @@ async function perform(
     default: {
       const type = relationType!;
       const fromCard = await board.card(text("issue"));
-      const toCard = await board.card(text("to"));
+      let toCard: Card;
+      try {
+        toCard = await board.card(text("to"));
+      } catch (error) {
+        if (
+          operation !== "unrelate" || !(error instanceof Failure) ||
+          error.kind !== "not_found"
+        ) throw error;
+        // The other card is gone or off the board: remove this card's side
+        // by the id or display it was stored under, or the relation could
+        // never be removed.
+        const ref = text("to").toLowerCase();
+        const stored = await relations.read(fromCard.id);
+        const kept = stored.filter((r) =>
+          !(r.type === type && r.direction === "outgoing" &&
+            (r.issue.toLowerCase() === ref ||
+              r.display.toLowerCase() === ref))
+        );
+        if (kept.length === stored.length) throw error;
+        await relations.write(fromCard.id, kept);
+        return { changed: true };
+      }
       const from = {
         id: fromCard.id,
         display: board.display(fromCard),
@@ -653,7 +674,17 @@ export const behavior = {
     },
     description: {
       description: "What this tracker says of itself",
-      schema: z.object({ tracker: z.string() }).passthrough(),
+      schema: z.object({
+        tracker: z.string(),
+        contract: z.number().int(),
+        origin: z.string(),
+        capabilities: z.object({
+          history: z.boolean(),
+          assign: z.boolean(),
+          pullRequests: z.boolean(),
+        }).strict(),
+        closesDuplicates: z.boolean(),
+      }).strict(),
       lifetime: "infinite" as const,
       garbageCollection: 5,
     },
@@ -703,15 +734,23 @@ export const behavior = {
         const run = args.run === undefined ? {} : { run: args.run };
         let answer: Record<string, unknown>;
         try {
-          let request: Record<string, unknown>;
+          let request: unknown;
           try {
             request = typeof args.request === "string"
               ? JSON.parse(args.request)
               : args.request;
           } catch {
-            throw new Failure("invalid", "the request is not a JSON object");
+            request = undefined;
           }
-          const result = await perform(ctx, args.operation, request);
+          if (
+            typeof request !== "object" || request === null ||
+            Array.isArray(request)
+          ) throw new Failure("invalid", "the request is not a JSON object");
+          const result = await perform(
+            ctx,
+            args.operation,
+            request as Record<string, unknown>,
+          );
           answer = { operation: args.operation, ...run, ok: true, result };
         } catch (error) {
           const failure = error instanceof Failure ? error : new Failure(

@@ -19,6 +19,7 @@ const CARD = "5f5f5f5f0000000000000c01";
 const CARD_2 = "5f5f5f5f0000000000000c02";
 const CARD_3 = "5f5f5f5f0000000000000c03";
 const FOREIGN = "5f5f5f5f0000000000000c99";
+const GONE = "5f5f5f5f0000000000000dead";
 
 interface FakeCard {
   id: string;
@@ -241,6 +242,13 @@ Deno.test("describe records the tracker for stagecraft", async () => {
     capabilities: { history: false, assign: false, pullRequests: false },
     closesDuplicates: false,
   });
+  const schema = behavior.resources.description.schema;
+  assertEquals(schema.safeParse(written.data).success, true);
+  assertEquals(schema.safeParse({ tracker: "trello" }).success, false);
+  assertEquals(
+    schema.safeParse({ ...written.data, extra: true }).success,
+    false,
+  );
 });
 
 // --- fetch_issue --------------------------------------------------------------
@@ -284,6 +292,14 @@ Deno.test("fetch_issue returns every comment, oldest first, across pages", async
   assertExists(pages[1].url.searchParams.get("before"));
 });
 
+/** Every operation that resolves an issue, with the rest of its request. */
+const onIssue: [string, Record<string, unknown>][] = [
+  ["fetch_issue", {}],
+  ["comment", { body: "hi" }],
+  ["set_status", { status: "In progress" }],
+  ["relate", { type: "related_to", to: CARD_2 }],
+];
+
 for (
   const [what, ref] of [
     ["a card on another board", FOREIGN],
@@ -293,16 +309,20 @@ for (
     ["an unknown shortLink", "nOsuchCd"],
   ]
 ) {
-  Deno.test(`fetch_issue reports not_found for ${what}`, async () => {
-    const fake = new FakeTrello();
-    const { operate } = tracker();
-    const answer = await run(
-      fake,
-      () => operate("fetch_issue", { issue: ref }),
-    );
-    assertEquals(answer.ok, false);
-    assertEquals(answer.kind, "not_found");
-  });
+  for (const [op, rest] of onIssue) {
+    Deno.test(`${op} reports not_found for ${what}`, async () => {
+      const fake = new FakeTrello();
+      const { operate, getWrittenResources } = tracker();
+      const answer = await run(
+        fake,
+        () => operate(op, { issue: ref, ...rest }),
+      );
+      assertEquals(answer.ok, false);
+      assertEquals(answer.kind, "not_found");
+      assertEquals(getWrittenResources().length, 1);
+      assertEquals(fake.requests.some((r) => r.method !== "GET"), false);
+    });
+  }
 }
 
 Deno.test("a 401 on the card after the board read is not_found", async () => {
@@ -313,13 +333,14 @@ Deno.test("a 401 on the card after the board read is not_found", async () => {
       : undefined
   );
   const { operate } = tracker();
-  for (const op of ["fetch_issue", "set_status"]) {
+  for (const [op, rest] of onIssue) {
     const answer = await run(
       fake,
-      () => operate(op, { issue: CARD, status: "Open" }),
+      () => operate(op, { issue: CARD, ...rest }),
     );
     assertEquals(answer.kind, "not_found", op);
   }
+  assertEquals(fake.requests.some((r) => r.method !== "GET"), false);
 });
 
 Deno.test("comment and set_status never touch a card on another board", async () => {
@@ -596,6 +617,17 @@ Deno.test("a request that is not JSON is an invalid answer", async () => {
   assertEquals(answer.kind, "invalid");
 });
 
+for (const request of ["null", "3", '"text"', "[]", '[{"issue":"x"}]']) {
+  Deno.test(`a request of ${request} is an invalid answer`, async () => {
+    const fake = new FakeTrello();
+    const { operate } = tracker();
+    const answer = await run(fake, () => operate("fetch_issue", request));
+    assertEquals(answer.kind, "invalid");
+    assertEquals(answer.detail, "the request is not a JSON object");
+    assertEquals(fake.requests.length, 0);
+  });
+}
+
 Deno.test("an operation the tracker does not offer is invalid", async () => {
   const fake = new FakeTrello();
   const { operate } = tracker();
@@ -744,7 +776,7 @@ Deno.test("fetch_issue keeps the stored display of a related card that is gone",
       relations: [{
         type: "related_to",
         direction: "outgoing",
-        issue: "5f5f5f5f0000000000000dead",
+        issue: GONE,
         display: "trello-77",
       }],
     },
@@ -757,6 +789,74 @@ Deno.test("fetch_issue keeps the stored display of a related card that is gone",
       .display,
     "trello-77",
   );
+});
+
+for (const [what, to] of [["id", GONE], ["display id", "TRELLO-77"]]) {
+  Deno.test(`unrelate removes a relation to a gone card by its ${what}`, async () => {
+    const fake = new FakeTrello();
+    const { operate, getWrittenResources } = tracker({
+      [`relations-${CARD}`]: {
+        card: CARD,
+        relations: [
+          {
+            type: "related_to",
+            direction: "outgoing",
+            issue: GONE,
+            display: "trello-77",
+          },
+          {
+            type: "blocked_by",
+            direction: "outgoing",
+            issue: GONE,
+            display: "trello-77",
+          },
+        ],
+      },
+    });
+    const answer = await run(
+      fake,
+      () => operate("unrelate", { issue: CARD, type: "related_to", to }),
+    );
+    assertEquals(answer.result, { changed: true });
+    assertEquals(relationsOf(getWrittenResources(), CARD), [{
+      type: "blocked_by",
+      direction: "outgoing",
+      issue: GONE,
+      display: "trello-77",
+    }]);
+  });
+}
+
+Deno.test("unrelate from a gone card it holds no relation to is not_found", async () => {
+  const fake = new FakeTrello();
+  const { operate, getWrittenResources } = tracker();
+  const answer = await run(
+    fake,
+    () => operate("unrelate", { issue: CARD, type: "related_to", to: GONE }),
+  );
+  assertEquals(answer.kind, "not_found");
+  assertEquals(getWrittenResources().length, 1);
+});
+
+Deno.test("unrelate removes a relation to a card moved off the board", async () => {
+  const fake = new FakeTrello();
+  const { operate, getWrittenResources } = tracker({
+    [`relations-${CARD}`]: {
+      card: CARD,
+      relations: [{
+        type: "related_to",
+        direction: "outgoing",
+        issue: FOREIGN,
+        display: "trello-9",
+      }],
+    },
+  });
+  const answer = await run(
+    fake,
+    () => operate("unrelate", { issue: CARD, type: "related_to", to: FOREIGN }),
+  );
+  assertEquals(answer.result, { changed: true });
+  assertEquals(relationsOf(getWrittenResources(), CARD), []);
 });
 
 const refusals: [string, Record<string, unknown>, Record<string, unknown>][] = [
