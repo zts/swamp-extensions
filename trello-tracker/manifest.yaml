@@ -1,0 +1,22 @@
+manifestVersion: 1
+name: "@zts/trello-tracker"
+version: "2026.10.25.1"
+license: MIT
+repository: https://github.com/zts/swamp-extensions
+description: >-
+  A stagecraft tracker that keeps a factory's tickets on one Trello board:
+  cards are tickets, the board's open lists are statuses and its labels are
+  ticket types. It meets stagecraft's tracker contract 1, sits behind a
+  @swamp/stagecraft/publisher, and keeps card relations (parent, blocked by,
+  related, duplicate) in its own swamp data, since Trello has none.
+paths:
+  base: manifest
+behaviors:
+  - trello_tracker.ts
+additionalFiles:
+  - README.md
+  - LICENSE.txt
+labels:
+  - stagecraft
+  - tracker
+  - trello
