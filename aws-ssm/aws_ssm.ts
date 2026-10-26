@@ -23,7 +23,9 @@ import {
 import { fromIni } from "npm:@aws-sdk/credential-providers@3.1150.0";
 import { z } from "npm:zod@4.6.7";
 
+/** Options swamp passes to put. */
 export interface VaultPutOptions {
+  /** Tags to add to the parameter. */
   tags?: Record<string, string>;
 }
 
@@ -84,8 +86,7 @@ export function parameterName(prefix: string, key: string): string {
 const configSchema = z.object({
   region: z.string().min(1).describe("AWS region of the parameters"),
   profile: z.string().min(1).optional().describe(
-    "Named profile from the AWS config files. When set it is used instead " +
-      "of the default credential chain.",
+    "Named AWS profile to use instead of the default credential chain",
   ),
   parameter_prefix: z.string().refine(
     (p) => p.startsWith("/") && p.endsWith("/"),
@@ -94,11 +95,11 @@ const configSchema = z.object({
     "Prefix of every parameter name; a secret key is appended to it",
   ),
   kms_key_id: z.string().min(1).optional().describe(
-    "KMS key that encrypts the parameters. The AWS-managed alias/aws/ssm " +
-      "key when omitted.",
+    "KMS key for the parameters; alias/aws/ssm when omitted",
   ),
 }).strict();
 
+/** A vault's config, after validation and defaults. */
 export type AwsSsmConfig = z.infer<typeof configSchema>;
 
 const SECURE_STRING = "SecureString";
@@ -304,6 +305,7 @@ export class AwsSsmVaultProvider implements VaultProvider {
   }
 }
 
+/** The vault type swamp loads from this extension. */
 export const vault = {
   type: "@zts/aws-ssm",
   name: "AWS SSM Parameter Store",
