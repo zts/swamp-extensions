@@ -18,7 +18,7 @@ swamp vault create @zts/aws-ssm ssm \
 printf '%s' "$DB_PASSWORD" | swamp vault put ssm db/password
 swamp vault put ssm api-key
 
-swamp vault get ssm db/password
+swamp vault read-secret ssm db/password
 swamp vault list-keys ssm
 swamp vault delete ssm db/password
 ```

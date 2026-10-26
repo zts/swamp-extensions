@@ -9,7 +9,7 @@ description: >-
   /swamp/) and the secret key. Credentials come from the AWS default chain or a
   named profile; an optional KMS key encrypts the values. get, put and delete
   refuse plaintext String parameters, delete is immediate, and errors never
-  carry the value. Supports swamp vault get, put, list-keys and delete.
+  carry the value. Supports swamp vault read-secret, put, list-keys and delete.
 paths:
   base: manifest
 vaults:
