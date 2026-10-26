@@ -38,6 +38,10 @@ other processes.
 Unknown keys are refused when the vault is created, so a misspelling such as
 `kmsKeyId` cannot quietly leave secrets on the default key.
 
+Every put encrypts with the vault's key. Without `kms_key_id`, overwriting a
+parameter that was created elsewhere with a customer-managed key re-encrypts it
+under `alias/aws/ssm`. Set `kms_key_id` to keep such parameters on their key.
+
 ## Authentication
 
 With no `profile`, the AWS SDK's default credential chain is used: environment
@@ -52,7 +56,8 @@ On `arn:aws:ssm:<region>:<account>:parameter<prefix>*`:
 
 - `ssm:GetParameter`: get, and the type check before put and delete
 - `ssm:PutParameter`: put
-- `ssm:AddTagsToResource`: put with tags to a key that already exists
+- `ssm:AddTagsToResource`: put with tags, both when creating a key and when
+  tagging one that exists
 - `ssm:DeleteParameter`: delete
 - `ssm:GetParametersByPath`: list-keys
 
