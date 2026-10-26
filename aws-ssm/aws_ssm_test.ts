@@ -180,6 +180,18 @@ Deno.test("get refuses a parameter that is not a SecureString", async () => {
   }
 });
 
+Deno.test("get refuses an answer with no value", async () => {
+  const { provider } = build(() => ({
+    Parameter: { Name: NAME, Type: "SecureString" },
+  }));
+
+  await assertRejects(
+    () => provider.get("db/password"),
+    Error,
+    `SSM returned no value for ${NAME}`,
+  );
+});
+
 Deno.test("get keeps the AWS error name and the parameter name", async () => {
   const { provider } = build(() => {
     throw awsError("AccessDeniedException", "not allowed to ssm:GetParameter");

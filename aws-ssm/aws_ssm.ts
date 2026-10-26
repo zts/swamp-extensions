@@ -164,7 +164,11 @@ export class AwsSsmVaultProvider implements VaultProvider {
     }
     const type = output.Parameter?.Type ?? "untyped";
     if (type !== SECURE_STRING) throw notSecure("get", name, type);
-    return output.Parameter?.Value ?? "";
+    const value = output.Parameter?.Value;
+    if (value === undefined) {
+      throw new Error(`aws-ssm get ${name}: SSM returned no value for ${name}`);
+    }
+    return value;
   }
 
   async put(
