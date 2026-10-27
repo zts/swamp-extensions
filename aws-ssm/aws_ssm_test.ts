@@ -356,7 +356,7 @@ Deno.test("list follows every page and strips the prefix", async () => {
 
   assertEquals(await provider.list(), ["a", "db/b", "c"]);
   const query = {
-    Path: "/swamp",
+    Path: "/swamp/",
     Recursive: true,
     WithDecryption: false,
     ParameterFilters: [

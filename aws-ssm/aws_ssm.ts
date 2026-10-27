@@ -231,8 +231,10 @@ export class AwsSsmVaultProvider implements VaultProvider {
 
   async list(): Promise<string[]> {
     const prefix = this.config.parameter_prefix;
-    // The path is the prefix without its trailing '/', except for the root.
-    const path = prefix === "/" ? "/" : prefix.slice(0, -1);
+    // The path keeps its trailing '/': IAM authorises GetParametersByPath
+    // against the path itself, so /swamp would need parameter/swamp granted
+    // on top of parameter/swamp/*, which covers /swamp/.
+    const path = prefix;
     const keys: string[] = [];
     let nextToken: string | undefined;
     do {
