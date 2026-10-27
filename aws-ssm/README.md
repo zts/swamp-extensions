@@ -11,8 +11,10 @@ sets of secrets that do not need Secrets Manager's rotation.
 
 ```sh
 swamp extension pull @zts/aws-ssm
+# choose a prefix and give the vault's credentials a policy for it first:
+# see "Setting up a vault"
 swamp vault create @zts/aws-ssm ssm \
-  --config '{"region": "eu-west-1", "parameter_prefix": "/swamp/"}'
+  --config '{"region": "eu-west-1", "parameter_prefix": "/swamp/ssm/"}'
 
 # put reads the value from stdin, or prompts for it without echo
 printf '%s' "$DB_PASSWORD" | swamp vault put ssm db/password
@@ -51,13 +53,36 @@ identity, and container or instance roles. With `profile` set, that profile's
 credentials are used even when credentials are also in the environment.
 Credentials never appear in the vault's config or in swamp data.
 
-## IAM permissions
+## Setting up a vault
 
-Every action is granted on the parameters under the vault's prefix,
-`arn:aws:ssm:<region>:<account>:parameter<prefix>*`, and on nothing else:
+Each vault owns one prefix, and its credentials can reach nothing outside it.
+Several vaults can share a region, an account and a KMS key and stay separate.
+Set one up in three steps, in this order.
 
-- `ssm:GetParameter`: get, and the type check before put and delete, which
-  reads without decrypting
+### 1. Choose the prefix
+
+Pick a `parameter_prefix` for this vault alone, such as `/swamp/payments/`. It
+must start and end with `/`. It must not contain another vault's prefix, or sit
+inside one: under `/swamp/` the key `payments/db` is the parameter
+`/swamp/payments/db`, which a vault on `/swamp/payments/` also sees as its key
+`db`, and a policy for `/swamp/*` covers both. The same goes for parameters
+other systems write: give the vault a prefix nothing else uses. Set the prefix
+even for a single vault, rather than relying on the default `/swamp/`, so a
+second vault later cannot land on the first one's prefix.
+
+### 2. Create the IAM policy
+
+Create a policy for the prefix and attach it to the role or user whose
+credentials the vault will use (see [Authentication](#authentication)), and give
+those credentials nothing else under any other vault's prefix. In the policies
+below, `<prefix>` is the vault's `parameter_prefix` written directly after
+`parameter`: `/swamp/payments/` gives
+`arn:aws:ssm:<region>:<account>:parameter/swamp/payments/*`.
+
+Every action is granted on the parameters under the prefix and nothing else:
+
+- `ssm:GetParameter`: get, and the type check before put and delete, which reads
+  without decrypting
 - `ssm:PutParameter`: put
 - `ssm:AddTagsToResource`: put with tags (`swamp vault put --label key=value`),
   both when creating a key and when tagging one that exists
@@ -65,14 +90,14 @@ Every action is granted on the parameters under the vault's prefix,
 - `ssm:GetParametersByPath`: list-keys, and put, since `swamp vault put` lists
   the vault's keys first
 
-Both policies below were tested on 2026-10-27, with the prefix `/swamp/`
-replaced by a test prefix: every operation above, under a role holding only
-that policy.
+Both policies were tested on 2026-10-27: every operation above, under a role
+holding only that policy.
 
-### With the default key
+#### With the default key
 
 Without `kms_key_id`, parameters use the AWS-managed `alias/aws/ssm` key, which
-SSM uses on the caller's behalf. No KMS statement is needed.
+SSM uses on the caller's behalf. No KMS statement is needed: the SSM statement
+alone keeps the vault to its prefix.
 
 ```json
 {
@@ -88,20 +113,23 @@ SSM uses on the caller's behalf. No KMS statement is needed.
         "ssm:DeleteParameter",
         "ssm:GetParametersByPath"
       ],
-      "Resource": "arn:aws:ssm:<region>:<account>:parameter/swamp/*"
+      "Resource": "arn:aws:ssm:<region>:<account>:parameter<prefix>*"
     }
   ]
 }
 ```
 
-### With a customer-managed key
+#### With a customer-managed key
 
 With `kms_key_id`, add `kms:Encrypt` (put) and `kms:Decrypt` (get) on that key.
-The resource is the key's ARN even when `kms_key_id` is an alias: KMS checks
-the key the alias points to. The `kms:ViaService` condition limits the
-statement to calls SSM makes for the caller. This assumes the key's policy
-leaves access to IAM, as a key's default policy does; a key policy that does not
-must grant the role itself.
+The resource is the key's ARN even when `kms_key_id` is an alias: KMS checks the
+key the alias points to. The `kms:ViaService` condition limits the statement to
+calls SSM makes for the caller, and the `kms:EncryptionContext:PARAMETER_ARN`
+condition to parameters under the prefix, so the key can be shared with other
+vaults, or other systems, without this one decrypting their parameters even if
+its credentials gain wider SSM rights. This assumes the key's policy leaves
+access to IAM, as a key's default policy does; a key policy that does not must
+grant the role itself.
 
 ```json
 {
@@ -117,7 +145,7 @@ must grant the role itself.
         "ssm:DeleteParameter",
         "ssm:GetParametersByPath"
       ],
-      "Resource": "arn:aws:ssm:<region>:<account>:parameter/swamp/*"
+      "Resource": "arn:aws:ssm:<region>:<account>:parameter<prefix>*"
     },
     {
       "Sid": "SwampVaultKey",
@@ -125,16 +153,38 @@ must grant the role itself.
       "Action": ["kms:Encrypt", "kms:Decrypt"],
       "Resource": "arn:aws:kms:<region>:<account>:key/<key-id>",
       "Condition": {
-        "StringEquals": { "kms:ViaService": "ssm.<region>.amazonaws.com" }
+        "StringEquals": { "kms:ViaService": "ssm.<region>.amazonaws.com" },
+        "StringLike": {
+          "kms:EncryptionContext:PARAMETER_ARN": "arn:aws:ssm:<region>:<account>:parameter<prefix>*"
+        }
       }
     }
   ]
 }
 ```
 
-For the prefix `/`, the resource is `parameter/*`; that case was not tested.
-Versions before 2026.10.27.1 sent list-keys' path without its trailing `/`, so
-they also needed `parameter/swamp` (no `/*`) for `ssm:GetParametersByPath`.
+For the prefix `/`, the resources are `parameter/*`, which covers every
+parameter in the region; that case was not tested, and such a vault cannot be
+kept apart from any other. Versions before 2026.10.27.1 sent list-keys' path
+without its trailing `/`, so they also needed the prefix without that `/`
+(`parameter/swamp` for `/swamp/`) for `ssm:GetParametersByPath`.
+
+### 3. Create the vault
+
+Create the vault with the prefix from step 1, using the credentials that hold
+the policy from step 2 (the `profile` key, or the default credential chain):
+
+```sh
+swamp vault create @zts/aws-ssm payments --config '{
+  "region": "eu-west-1",
+  "profile": "payments-vault",
+  "parameter_prefix": "/swamp/payments/"
+}'
+```
+
+Add `"kms_key_id"` for a customer-managed key. Then run
+`swamp vault list-keys payments`: an AccessDenied names the action and the
+resource the policy is missing.
 
 ## Keys and parameter names
 
