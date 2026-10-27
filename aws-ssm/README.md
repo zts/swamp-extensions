@@ -40,7 +40,8 @@ Unknown keys are refused when the vault is created, so a misspelling such as
 
 Every put encrypts with the vault's key. Without `kms_key_id`, overwriting a
 parameter that was created elsewhere with a customer-managed key re-encrypts it
-under `alias/aws/ssm`. Set `kms_key_id` to keep such parameters on their key.
+under `alias/aws/ssm`. Set `kms_key_id` to that key to keep such parameters on
+it.
 
 ## Authentication
 
@@ -52,17 +53,88 @@ Credentials never appear in the vault's config or in swamp data.
 
 ## IAM permissions
 
-On `arn:aws:ssm:<region>:<account>:parameter<prefix>*`:
+Every action is granted on the parameters under the vault's prefix,
+`arn:aws:ssm:<region>:<account>:parameter<prefix>*`, and on nothing else:
 
-- `ssm:GetParameter`: get, and the type check before put and delete
+- `ssm:GetParameter`: get, and the type check before put and delete, which
+  reads without decrypting
 - `ssm:PutParameter`: put
-- `ssm:AddTagsToResource`: put with tags, both when creating a key and when
-  tagging one that exists
+- `ssm:AddTagsToResource`: put with tags (`swamp vault put --label key=value`),
+  both when creating a key and when tagging one that exists
 - `ssm:DeleteParameter`: delete
-- `ssm:GetParametersByPath`: list-keys
+- `ssm:GetParametersByPath`: list-keys, and put, since `swamp vault put` lists
+  the vault's keys first
 
-With a customer-managed `kms_key_id`, also `kms:Encrypt` and `kms:Decrypt` (and
-`kms:GenerateDataKey`) on that key.
+Both policies below were tested on 2026-10-27, with the prefix `/swamp/`
+replaced by a test prefix: every operation above, under a role holding only
+that policy.
+
+### With the default key
+
+Without `kms_key_id`, parameters use the AWS-managed `alias/aws/ssm` key, which
+SSM uses on the caller's behalf. No KMS statement is needed.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SwampVaultParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:PutParameter",
+        "ssm:AddTagsToResource",
+        "ssm:DeleteParameter",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": "arn:aws:ssm:<region>:<account>:parameter/swamp/*"
+    }
+  ]
+}
+```
+
+### With a customer-managed key
+
+With `kms_key_id`, add `kms:Encrypt` (put) and `kms:Decrypt` (get) on that key.
+The resource is the key's ARN even when `kms_key_id` is an alias: KMS checks
+the key the alias points to. The `kms:ViaService` condition limits the
+statement to calls SSM makes for the caller. This assumes the key's policy
+leaves access to IAM, as a key's default policy does; a key policy that does not
+must grant the role itself.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SwampVaultParameters",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:PutParameter",
+        "ssm:AddTagsToResource",
+        "ssm:DeleteParameter",
+        "ssm:GetParametersByPath"
+      ],
+      "Resource": "arn:aws:ssm:<region>:<account>:parameter/swamp/*"
+    },
+    {
+      "Sid": "SwampVaultKey",
+      "Effect": "Allow",
+      "Action": ["kms:Encrypt", "kms:Decrypt"],
+      "Resource": "arn:aws:kms:<region>:<account>:key/<key-id>",
+      "Condition": {
+        "StringEquals": { "kms:ViaService": "ssm.<region>.amazonaws.com" }
+      }
+    }
+  ]
+}
+```
+
+For the prefix `/`, the resource is `parameter/*`; that case was not tested.
+Versions before 2026.10.27.1 sent list-keys' path without its trailing `/`, so
+they also needed `parameter/swamp` (no `/*`) for `ssm:GetParametersByPath`.
 
 ## Keys and parameter names
 
