@@ -154,9 +154,12 @@ privateKey: ${{ model.example-cert.resource.certificate.certificate.attributes.p
   issues a new certificate under the new name.
 - **Changing the CA.** A certificate is reused only on the CA, account and name
   it was issued with. After a change, the next `apply` issues a new one.
+- **Changing the key or chain.** A new `keyType`, `profile` or `preferredChain`
+  takes effect at the next renewal. To apply it now, run `apply` with
+  `--input forceRenew=true`.
 - **Failures.** A failed `apply` changes no certificate data, but an account
-  lego registered before failing is kept, so the retry doesn't register another.
-  lego's output is in the `log` file.
+  lego registered before failing, or before the run was aborted, is kept, so the
+  retry doesn't register another. lego's output is in the `log` file.
 - **Revocation.** `revoke` uses the account and CA that issued the certificate,
   whatever `server` says now. The next `apply` issues a new certificate.
 - **One run at a time.** swamp locks the behavior while a method runs, so two
