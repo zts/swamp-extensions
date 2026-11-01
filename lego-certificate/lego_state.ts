@@ -114,7 +114,10 @@ export async function digest(set: FileSet): Promise<string> {
   ].sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
   const bytes = new TextEncoder().encode(JSON.stringify(entries));
   const hash = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, "0"))
+  return Array.from(
+    new Uint8Array(hash),
+    (b) => b.toString(16).padStart(2, "0"),
+  )
     .join("");
 }
 

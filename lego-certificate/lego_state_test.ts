@@ -131,7 +131,12 @@ Deno.test("restore refuses paths outside the subtree", async () => {
       ]
     ) {
       await assertRejects(
-        () => restore(dir, { files: { [rel]: "x" }, secretFiles: {} }, "certificates"),
+        () =>
+          restore(
+            dir,
+            { files: { [rel]: "x" }, secretFiles: {} },
+            "certificates",
+          ),
         Error,
         "refusing",
         rel,

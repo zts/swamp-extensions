@@ -29,6 +29,9 @@ const decoder = new TextDecoder();
 
 async function capture(binary: string, args: string[]) {
   try {
+    // lego is the ACME client this behavior exists to drive; its argv is
+    // built from validated arguments and carries no secret.
+    // swamp-quality-ignore deno-command
     const output = await new Deno.Command(binary, {
       args,
       stdin: "null",
@@ -128,6 +131,9 @@ export async function runLego(
   limits: RunLimits,
 ): Promise<LegoResult> {
   limits.signal.throwIfAborted();
+  // lego is the ACME client this behavior exists to drive; secrets reach it
+  // only through env, and the environment is cleared first.
+  // swamp-quality-ignore deno-command
   const child = new Deno.Command(binary, {
     args,
     env,

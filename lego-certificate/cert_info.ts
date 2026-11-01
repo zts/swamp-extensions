@@ -30,7 +30,9 @@ const PEM_BLOCK =
 export function parseBundle(bundle: string): CertificateInfo {
   const blocks = bundle.match(PEM_BLOCK);
   if (!blocks) throw new Error("lego's certificate file holds no certificate");
-  const [leafPem, ...chain] = blocks.map((b) => b.endsWith("\n") ? b : `${b}\n`);
+  const [leafPem, ...chain] = blocks.map((b) =>
+    b.endsWith("\n") ? b : `${b}\n`
+  );
   const leaf = new X509Certificate(leafPem);
   const domains = (leaf.subjectAltName ?? "").split(", ")
     .filter((entry) => entry.startsWith("DNS:"))
@@ -54,5 +56,7 @@ export function parseBundle(bundle: string): CertificateInfo {
 
 /** Whole days from `now` until `notAfter`, rounded down. */
 export function daysRemaining(notAfter: string, now: Date): number {
-  return Math.floor((new Date(notAfter).getTime() - now.getTime()) / 86_400_000);
+  return Math.floor(
+    (new Date(notAfter).getTime() - now.getTime()) / 86_400_000,
+  );
 }

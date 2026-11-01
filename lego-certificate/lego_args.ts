@@ -192,7 +192,9 @@ export function childEnv(o: ChildEnvOptions): Record<string, string> {
   for (const name of Object.keys(o.dnsEnv)) {
     if (!ENV_NAME.test(name)) {
       throw new Error(
-        `DNS setting ${JSON.stringify(name)} is not an environment variable name`,
+        `DNS setting ${
+          JSON.stringify(name)
+        } is not an environment variable name`,
       );
     }
     if (name.startsWith("LEGO_")) {

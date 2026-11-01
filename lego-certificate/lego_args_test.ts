@@ -202,7 +202,7 @@ Deno.test("childEnv overlays DNS settings, the EAB hmac and trace headers", () =
     ambientCredentials: false,
     dnsEnv: {
       AWS_PROFILE: "prod",
-      MYTHICBEASTS_PASSWORD: "pa$$word \\ # with\nnewline \"quoted\"",
+      MYTHICBEASTS_PASSWORD: 'pa$$word \\ # with\nnewline "quoted"',
     },
     eabHmac: "hmac-secret",
     traceHeaders: { traceparent: "00-abc-def-01", tracestate: "k=v" },
@@ -210,7 +210,7 @@ Deno.test("childEnv overlays DNS settings, the EAB hmac and trace headers", () =
   assertEquals(env.AWS_PROFILE, "prod");
   assertEquals(
     env.MYTHICBEASTS_PASSWORD,
-    "pa$$word \\ # with\nnewline \"quoted\"",
+    'pa$$word \\ # with\nnewline "quoted"',
   );
   assertEquals(env.LEGO_EAB_HMAC, "hmac-secret");
   assertEquals(env.TRACEPARENT, "00-abc-def-01");
