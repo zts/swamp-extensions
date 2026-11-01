@@ -1,0 +1,6 @@
+version: 1
+accept:
+  - rule: behavior-spelling
+    reason: >-
+      New extension with no existing users; it targets swamp releases that
+      load the behavior spelling.

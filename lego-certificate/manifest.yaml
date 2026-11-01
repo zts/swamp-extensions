@@ -1,0 +1,29 @@
+manifestVersion: 1
+name: "@zts/lego-certificate"
+version: "2026.11.01.1"
+license: MIT
+repository: https://github.com/zts/swamp-extensions
+description: >-
+  One ACME certificate (Let's Encrypt, ZeroSSL, Google Trust Services or any
+  ACME CA), issued and renewed with the lego v5 CLI through any of lego's
+  DNS-01 providers. Swamp keeps lego's state: each run restores the account
+  and certificate into a fresh temporary directory, runs lego, saves what
+  changed (the private key as a sensitive field in a vault) and deletes the
+  directory, so nothing persists on the host. apply issues or renews when
+  due, status reports validity, revoke revokes with the issuing CA. DNS
+  credentials reach lego only through its environment. Needs lego 5 on the
+  host.
+paths:
+  base: manifest
+behaviors:
+  - lego_certificate.ts
+additionalFiles:
+  - README.md
+  - LICENSE.txt
+labels:
+  - acme
+  - letsencrypt
+  - tls
+  - certificates
+  - lego
+  - dns
