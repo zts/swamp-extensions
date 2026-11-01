@@ -107,6 +107,33 @@ Deno.test("dnsCredentials runs dnshelp for the provider", async () => {
   assertEquals(calls[0].args, ["dnshelp", "-c", "mythicbeasts"]);
 });
 
+Deno.test("dnsCredentials refuses dnshelp output it does not recognise", async () => {
+  // A later lego could reword dnshelp; then the check must fail, not pass
+  // for every provider because no credentials were found.
+  await withMockedCommand(
+    [{ stdout: "Provider settings for mythicbeasts:\n  USER, PASS\n", code: 0 }],
+    async () => {
+      await assertRejects(
+        () => dnsCredentials("lego", "mythicbeasts"),
+        Error,
+        "could not read",
+      );
+    },
+  );
+});
+
+Deno.test("dnsCredentials accepts a provider that lists no credentials", async () => {
+  const { result } = await withMockedCommand(
+    [{
+      stdout: "Configuration for Exec.\nCode:   'exec'\n\nAdditional " +
+        'Configuration:\n  - "EXEC_PATH":  The path of the program\n',
+      code: 0,
+    }],
+    () => dnsCredentials("lego", "exec"),
+  );
+  assertEquals(result, []);
+});
+
 Deno.test("dnsCredentials reports an unknown provider", async () => {
   await withMockedCommand(
     [{ stdout: "", stderr: "unsupported DNS provider: nope", code: 1 }],

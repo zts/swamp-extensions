@@ -102,6 +102,14 @@ export async function dnsCredentials(
       `lego dnshelp -c ${provider} failed: ${(stderr || stdout).trim()}`,
     );
   }
+  // Without lego's "Code:" line the output is not the format parsed here,
+  // and finding no credentials would wrongly mean none are needed.
+  if (!/^Code:\s/m.test(stdout)) {
+    throw new Error(
+      `could not read the credentials lego dnshelp lists for ${provider}; ` +
+        `its output format has changed`,
+    );
+  }
   return parseDnsHelpCredentials(stdout);
 }
 
