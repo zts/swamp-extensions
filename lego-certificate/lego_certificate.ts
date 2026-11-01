@@ -80,8 +80,10 @@ const GlobalArgsSchema = z.object({
   dnsEnv: z.record(z.string(), z.string()).default({}).describe(
     "Non-secret provider settings, by environment variable name",
   ),
+  // Sensitive as a whole and per value: swamp refuses literals per value,
+  // and its metadata reports only the field's own marker.
   dnsSecretEnv: z.record(z.string(), z.string().meta({ sensitive: true }))
-    .default({}).describe(
+    .default({}).meta({ sensitive: true }).describe(
       "Provider credentials, by environment variable name; from a vault",
     ),
   dnsResolvers: z.array(z.string().min(1)).optional().describe(
@@ -99,8 +101,7 @@ const GlobalArgsSchema = z.object({
     "Do not wait for the recursive resolvers",
   ),
   ambientCredentials: z.boolean().default(false).describe(
-    "Pass swamp's whole environment to lego (less LEGO_*), for providers " +
-      "that use a credential chain such as route53's",
+    "Give lego swamp's whole environment, for credential chains",
   ),
   legoPath: z.string().min(1).default("lego").describe(
     "The lego 5 binary, by path or name on PATH",

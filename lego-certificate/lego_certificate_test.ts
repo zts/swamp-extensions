@@ -525,6 +525,40 @@ Deno.test("the dns-credentials check needs one provider credential", async () =>
   }
 });
 
+// deno-lint-ignore no-explicit-any
+type AnySchema = any;
+
+/** The schema's own sensitive marker, through optional/default wrappers. */
+function markedSensitive(schema: AnySchema): boolean {
+  if (schema.meta()?.sensitive === true) return true;
+  const inner = schema._zod.def.innerType;
+  return inner ? markedSensitive(inner) : false;
+}
+
+/** The sensitive marker on a record's values. */
+function valuesSensitive(schema: AnySchema): boolean {
+  const def = schema._zod.def;
+  if (def.type === "record") return markedSensitive(def.valueType);
+  return def.innerType ? valuesSensitive(def.innerType) : false;
+}
+
+Deno.test("secrets are marked sensitive so swamp keeps them in a vault", () => {
+  const globals = behavior.globalArguments.shape;
+  assert(markedSensitive(globals.eabHmac), "eabHmac");
+  assert(markedSensitive(globals.dnsSecretEnv), "dnsSecretEnv");
+  assert(valuesSensitive(globals.dnsSecretEnv), "dnsSecretEnv values");
+  const account = behavior.resources.account.schema.shape;
+  assert(valuesSensitive(account.secretFiles), "account secretFiles");
+  const cert = behavior.resources.certificate.schema.shape;
+  assert(markedSensitive(cert.privateKeyPem), "privateKeyPem");
+  assert(valuesSensitive(cert.legoSecretFiles), "legoSecretFiles");
+
+  // And what is public stays public, so it can be read without a vault.
+  assert(!markedSensitive(globals.dnsEnv) && !valuesSensitive(globals.dnsEnv));
+  assert(!markedSensitive(cert.certificatePem));
+  assert(!valuesSensitive(account.files) && !valuesSensitive(cert.legoFiles));
+});
+
 Deno.test("global arguments refuse a server that is not a URL", () => {
   const parsed = behavior.globalArguments.safeParse({
     domains: ["example.com"],
