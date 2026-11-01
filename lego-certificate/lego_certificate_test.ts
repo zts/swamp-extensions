@@ -64,11 +64,13 @@ async function call(
   method: MethodName,
   args: Record<string, unknown> = {},
   globals: Record<string, unknown> = {},
+  signal?: AbortSignal,
 ) {
   const test = createModelTestContext({
     globalArgs: { ...f.globals, ...globals },
     methodName: method,
     storedResources: { ...f.store },
+    signal,
   });
   let error: Error | undefined;
   try {
@@ -332,6 +334,41 @@ Deno.test("an account registered before lego fails is kept for the retry", async
       failed.getWrittenFiles().some((w) => w.specName === "log"),
       "the log is kept on failure",
     );
+
+    const retry = await call(f, "apply");
+    assertEquals(retry.error, undefined);
+    assertEquals(retry.written.map((w) => w.specName), ["certificate"]);
+  } finally {
+    await teardown(f);
+  }
+});
+
+Deno.test("an account registered before the run is aborted is kept", async () => {
+  const f = await setup();
+  try {
+    const controller = new AbortController();
+    const watcher = (async () => {
+      for (let i = 0; i < 200; i++) {
+        try {
+          await Deno.stat(`${f.callsFile}.registered`);
+          controller.abort(new Error("cancelled by the test"));
+          return;
+        } catch {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+      }
+    })();
+    const aborted = await call(f, "apply", {}, {
+      dnsEnv: {
+        MYTHICBEASTS_USERNAME: "user",
+        FAKE_LEGO_CALLS: f.callsFile,
+        FAKE_LEGO_FAIL: "hang-after-register",
+      },
+    }, controller.signal);
+    await watcher;
+    assertStringIncludes(aborted.error!.message, "cancelled by the test");
+    assertEquals(aborted.written.map((w) => w.specName), ["account"]);
+    assertEquals(certificate(f), undefined);
 
     const retry = await call(f, "apply");
     assertEquals(retry.error, undefined);

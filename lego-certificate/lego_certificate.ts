@@ -328,6 +328,8 @@ async function apply(
       name,
       domains: g.domains.join(", "),
     });
+    // An abort rejects; hold the error until the account is saved below.
+    let aborted: unknown;
     const result = await runLego(
       g.legoPath,
       runArgs({
@@ -352,12 +354,15 @@ async function apply(
       }),
       env,
       { signal: context.signal, timeoutMs: g.timeoutSeconds * 1000 },
-    );
-    await writeLog(context, "apply", version, result);
+    ).catch((error) => {
+      aborted = error;
+      return undefined;
+    });
+    if (result) await writeLog(context, "apply", version, result);
     const handles: { name: string }[] = [];
 
-    // Keep a newly registered account even when lego then failed, so the
-    // retry reuses it instead of registering another.
+    // Keep a newly registered account even when lego then failed or the
+    // run was aborted, so the retry reuses it instead of registering another.
     const accounts = await snapshot(dir, "accounts");
     const registered = registeredAccount(accounts);
     if (registered && await digest(accounts) !== accountBefore) {
@@ -378,6 +383,7 @@ async function apply(
       });
     }
 
+    if (!result) throw aborted;
     if (result.code !== 0 || result.timedOut) throw failure("run", result);
 
     const certs = certificateFiles(await snapshot(dir, "certificates"), name);

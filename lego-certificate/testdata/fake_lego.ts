@@ -6,7 +6,8 @@
 //
 // Controls, read from the environment the behavior gives it:
 //   FAKE_LEGO_CALLS  file to append each invocation's argv to, as JSON lines
-//   FAKE_LEGO_FAIL   "before-register" | "after-register" | "on-revoke"
+//   FAKE_LEGO_FAIL   "before-register" | "after-register" | "on-revoke" |
+//                    "hang-after-register" (touches FAKE_LEGO_CALLS.registered)
 import { X509Certificate } from "node:crypto";
 import {
   ISSUER,
@@ -163,7 +164,7 @@ function ensureAccount(
   console.log(`time=x level=INFO msg="Account registered." id=${id}`);
 }
 
-function run(args: string[]) {
+async function run(args: string[]) {
   const { values, bools } = parse(args, RUN_VALUE_FLAGS, RUN_BOOL_FLAGS);
   const one = (flag: string) => values[flag]?.[0];
   const path = one("--path") ?? fail("--path is required");
@@ -179,6 +180,11 @@ function run(args: string[]) {
   ensureAccount(path, server, one("--account-id")!, one("--email"));
   if (Deno.env.get("FAKE_LEGO_FAIL") === "after-register") {
     fail("acme: error: 400 :: urn:ietf:params:acme:error:dns");
+  }
+  if (Deno.env.get("FAKE_LEGO_FAIL") === "hang-after-register") {
+    // Stand in for a slow DNS propagation wait, until lego is stopped.
+    Deno.writeTextFileSync(`${Deno.env.get("FAKE_LEGO_CALLS")}.registered`, "");
+    while (true) await new Promise((r) => setTimeout(r, 50));
   }
 
   const crt = `${path}/certificates/${name}.crt`;
@@ -262,7 +268,7 @@ if (args[0] === "--version") {
   if (args[2] !== "mythicbeasts") fail(`unsupported DNS provider: ${args[2]}`);
   console.log(MYTHICBEASTS_HELP);
 } else if (args[0] === "run") {
-  run(args.slice(1));
+  await run(args.slice(1));
 } else if (args[0] === "certificates" && args[1] === "revoke") {
   revoke(args.slice(2));
 } else {
