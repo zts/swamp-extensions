@@ -65,14 +65,17 @@ swamp workflow run @zts/classify-post-pdf/scan-mail --input directory=scans
 ```
 
 The workflow lists the PDFs with `listPdfs`, then scans each, using the
-`classify-post-pdf` behavior created above (or creating it if it is missing).
-A letter that fails does not stop the rest.
+`classify-post-pdf` behavior created above (or creating it if it is missing). A
+letter that fails does not stop the rest. Symlinks to PDFs are followed; a
+broken link is skipped with a warning. Each run keeps its list as
+`pdf-list-<run id>`, so runs started together each scan their own directory;
+these small records are kept, one per run.
 
 ## What it records
 
-Each scan writes two records named after the file and its contents, for
-example `scans/Water bill.pdf` becomes `details-Water-bill-1a2b3c4d5e6f7a8b`
-and `header-Water-bill-1a2b3c4d5e6f7a8b`:
+Each scan writes two records named after the file and its contents, for example
+`scans/Water bill.pdf` becomes `details-Water-bill-1a2b3c4d5e6f7a8b` and
+`header-Water-bill-1a2b3c4d5e6f7a8b`:
 
 - `header`: the rendered region, as PNG.
 - `details`:
@@ -93,24 +96,25 @@ and `header-Water-bill-1a2b3c4d5e6f7a8b`:
 
 Scanning the same file again adds a version to its records (100 are kept). A
 different letter saved under a reused name, such as a scanner's `scan0001.pdf`,
-gets its own records, because its contents differ. Two files share records
-only when they hold the same contents under names that differ only in
-punctuation; `listPdfs` keeps the first and logs a warning naming the one it
-skipped. Names keep at most 64 characters of the file name.
+gets its own records, because its contents differ. Two files share records only
+when they hold the same contents under names that differ only in punctuation;
+`listPdfs` keeps the first and logs a warning naming the one it skipped. Names
+keep at most 64 characters of the file name.
 
 ## What to expect
 
-- **Each letter loads the model again.** On this author's Mac (MPS), reading
-  the sample letter took 14s to load the model and 14s to read it, 49s for the
-  whole `swamp behavior run`; the workflow read two letters in 52s. Scans take
-  turns on the model across the machine.
+- **Each letter loads the model again.** On this author's Mac (MPS), reading the
+  sample letter took 14s to load the model and 14s to read it, 49s for the whole
+  `swamp behavior run`; the workflow read two letters in 52s. Scans take turns
+  on the model across the machine.
 - **Local only.** `scan` calls qianfan-ocr through swamp's `runModel`, which
   remote workers do not offer.
-- **qianfan-ocr keeps its own record** of each read, under its own behavior.
-  Its `image` field names a temporary file that `scan` has already removed; the
+- **qianfan-ocr keeps its own record** of each read, under its own behavior. Its
+  `image` field names a temporary file that `scan` has already removed; the
   image is kept here as `header`.
 - **Personal data.** `details` and `header` hold what your letters say, as do
-  qianfan-ocr's records, in the swamp datastore.
+  qianfan-ocr's records, in the swamp datastore. `scan` keeps the letters'
+  contents out of its logs; they name files and record names only.
 - **Only the image is read.** A PDF's text layer, if it has one, is not used.
 
 ## Development
@@ -121,8 +125,7 @@ skipped. Names keep at most 64 characters of the file name.
 
 The tests render the synthetic letter in `testdata/` with the real PDFium; they
 need no model. `testdata/make_sample_letter.py` regenerates it
-(`uv run --script testdata/make_sample_letter.py`); everything in it is made
-up.
+(`uv run --script testdata/make_sample_letter.py`); everything in it is made up.
 
 ## License
 
