@@ -1,0 +1,75 @@
+id: 6b0f3c52-8f1e-4c47-9a3d-2e5b7c1d9f40
+name: "@zts/classify-post-pdf/scan-mail"
+description: >-
+  Read the key details off every scanned letter (PDF) in a directory with
+  @zts/classify-post-pdf, one letter at a time. Needs an installed
+  @zts/qianfan-ocr behavior; see the extension's README.
+tags: {}
+inputs:
+  type: object
+  required:
+    - directory
+  properties:
+    directory:
+      type: string
+      description: Directory of scanned letters; absolute, or relative to the repository
+    fraction:
+      type: number
+      description: Share of the first page, from the top, to read
+      default: 0.25
+    ocrBehavior:
+      type: string
+      description: Name of the installed @zts/qianfan-ocr behavior
+      default: qianfan-ocr
+jobs:
+  # Listing is its own job so the scan job reads this run's list: a forEach
+  # reads its list when its job starts.
+  - name: list
+    description: Find the PDFs to scan
+    steps:
+      - name: list-pdfs
+        task:
+          type: behavior
+          behaviorType: "@zts/classify-post-pdf"
+          behaviorName: classify-post-pdf
+          methodName: listPdfs
+          globalArgs:
+            ocrBehavior: ${{ inputs.ocrBehavior }}
+          inputs:
+            directory: ${{ inputs.directory }}
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0
+  - name: scan
+    description: Read each letter in turn
+    steps:
+      - name: scan-${{ self._index }}
+        description: Read one letter
+        forEach:
+          item: pdf
+          in: ${{ data.latest('classify-post-pdf', 'pdf-list').attributes.files }}
+        # Each scan loads the multi-GB model, and qianfan-ocr runs one model
+        # at a time on the machine anyway.
+        concurrency: 1
+        task:
+          type: behavior
+          behaviorType: "@zts/classify-post-pdf"
+          behaviorName: classify-post-pdf
+          methodName: scan
+          globalArgs:
+            ocrBehavior: ${{ inputs.ocrBehavior }}
+          inputs:
+            pdfPath: ${{ self.pdf.path }}
+            fraction: ${{ inputs.fraction }}
+        dependsOn: []
+        weight: 0
+        # One unreadable letter should not stop the rest.
+        allowFailure: true
+    dependsOn:
+      - job: list
+        condition:
+          type: succeeded
+    weight: 0
+version: 1
