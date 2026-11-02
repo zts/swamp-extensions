@@ -16,10 +16,12 @@ export interface UvSettings {
   signal: AbortSignal;
 }
 
-/** What one helper run printed. */
-export interface HelperOutput {
-  result: Record<string, unknown>;
-  stderr: string;
+/** How to run one helper subcommand. */
+export interface RunOptions {
+  /** Keep uv and Hugging Face off the network. */
+  offline: boolean;
+  /** Given the helper's stderr, if any, whether the run succeeds or fails. */
+  onStderr?: (stderr: string) => void;
 }
 
 const decoder = new TextDecoder();
@@ -99,8 +101,8 @@ export async function runHelper(
   settings: UvSettings,
   script: string,
   args: string[],
-  { offline }: { offline: boolean },
-): Promise<HelperOutput> {
+  { offline, onStderr }: RunOptions,
+): Promise<Record<string, unknown>> {
   const env: Record<string, string> = {};
   if (settings.hfHome) env.HF_HOME = settings.hfHome;
   if (offline) env.HF_HUB_OFFLINE = "1";
@@ -113,6 +115,7 @@ export async function runHelper(
     script,
     ...args,
   ], env);
+  if (stderr.trim()) onStderr?.(stderr.trim());
   const result = jsonObject(stdout.trim());
 
   if (code === 0) {
@@ -124,7 +127,7 @@ export async function runHelper(
           stdout.trim().slice(0, 200),
       );
     }
-    return { result, stderr };
+    return result;
   }
   if (result && typeof result.error === "string") {
     throw new Error(result.error);

@@ -39,16 +39,30 @@ Deno.test("environmentExists is false when uv only finds an interpreter outside 
   });
 });
 
-Deno.test("runHelper returns the helper's JSON and its stderr", async () => {
+Deno.test("runHelper returns the helper's JSON and hands on its stderr", async () => {
   await withFakeUv({ FAKE_UV_STDOUT: '{"rawOutput": "hi"}' }, async (fake) => {
-    const { result, stderr } = await runHelper(
+    const seen: string[] = [];
+    const result = await runHelper(
       settings(fake.uvPath),
       SCRIPT,
-      ["extract", "--image", "a.png"],
-      { offline: true },
+      ["extract", "--image=a.png"],
+      { offline: true, onStderr: (text) => seen.push(text) },
     );
     assertEquals(result, { rawOutput: "hi" });
-    assertStringIncludes(stderr, "loading model");
+    assertStringIncludes(seen.join(""), "loading model");
+  });
+});
+
+Deno.test("runHelper hands on the helper's stderr when the helper fails", async () => {
+  await withFakeUv({ FAKE_UV_RUN: "helper-error" }, async (fake) => {
+    const seen: string[] = [];
+    await assertRejects(() =>
+      runHelper(settings(fake.uvPath), SCRIPT, ["extract"], {
+        offline: true,
+        onStderr: (text) => seen.push(text),
+      })
+    );
+    assertStringIncludes(seen.join(""), "qianfan-ocr helper started");
   });
 });
 

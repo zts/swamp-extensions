@@ -52,7 +52,7 @@ const ExtractArgsSchema = z.object({
   ),
   ...ModelArgs,
   name: z.string().regex(/^[A-Za-z0-9_-]+$/).optional().describe(
-    "Name of the ocr resource to write; default from the image's file name",
+    "Name of the ocr resource, after ocr-; default the image file's stem",
   ),
 });
 
@@ -109,16 +109,23 @@ function uvSettings(context: Context): UvSettings {
   return { uvPath: g.uvPath, hfHome: g.hfHome, signal: context.signal };
 }
 
-function logHelper(context: Context, stderr: string) {
-  const text = stderr.trim();
-  if (text) context.logger.info("helper: {stderr}", { stderr: text });
+function logHelper(context: Context) {
+  return (stderr: string) =>
+    context.logger.info("helper: {stderr}", { stderr });
 }
 
-/** A resource name from an image's file name: its stem, in safe characters. */
-export function instanceName(imagePath: string): string {
+/**
+ * The ocr resource name for an image: ocr- and the given name, or else the
+ * image file's stem in safe characters. The prefix keeps ocr results apart
+ * from the install record, which swamp stores under the same instance names.
+ */
+export function instanceName(imagePath: string, name?: string): string {
   const stem = imagePath.split("/").pop()!.replace(/\.[^.]+$/, "");
-  return stem.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") ||
-    "image";
+  return `ocr-${
+    name ??
+      (stem.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") ||
+        "image")
+  }`;
 }
 
 async function isFile(path: string): Promise<boolean> {
@@ -161,15 +168,16 @@ export const behavior = {
         const a = InstallArgsSchema.parse(args);
         const settings = uvSettings(context);
         const script = context.extensionFile(HELPER);
+        context.logger.info("Installing {model}@{revision}", {
+          model: a.model,
+          revision: a.revision,
+        });
         const environmentExisted = await environmentExists(settings, script);
-        const { result, stderr } = await runHelper(settings, script, [
+        const result = await runHelper(settings, script, [
           "install",
-          "--model",
-          a.model,
-          "--revision",
-          a.revision,
-        ], { offline: false });
-        logHelper(context, stderr);
+          `--model=${a.model}`,
+          `--revision=${a.revision}`,
+        ], { offline: false, onStderr: logHelper(context) });
         const modelAlreadyCached = result.modelAlreadyCached === true;
         const handle = await context.writeResource("install", "install", {
           model: a.model,
@@ -196,32 +204,32 @@ export const behavior = {
           : `${context.repoDir}/${a.imagePath}`;
         if (!await isFile(image)) throw new Error(`image not found: ${image}`);
 
-        const { result, stderr } = await runHelper(
+        context.logger.info("Reading {image} with {model}@{revision}", {
+          image,
+          model: a.model,
+          revision: a.revision,
+        });
+        // Values go as --flag=value, so one starting with "-" stays a value.
+        const result = await runHelper(
           uvSettings(context),
           context.extensionFile(HELPER),
           [
             "extract",
-            "--image",
-            image,
-            "--prompt",
-            a.prompt,
-            "--model",
-            a.model,
-            "--revision",
-            a.revision,
-            "--max-new-tokens",
-            String(a.maxNewTokens),
+            `--image=${image}`,
+            `--prompt=${a.prompt}`,
+            `--model=${a.model}`,
+            `--revision=${a.revision}`,
+            `--max-new-tokens=${a.maxNewTokens}`,
           ],
-          { offline: true },
+          { offline: true, onStderr: logHelper(context) },
         );
-        logHelper(context, stderr);
         const parsed = result.parsed && typeof result.parsed === "object" &&
             !Array.isArray(result.parsed)
           ? result.parsed as Record<string, unknown>
           : null;
         const handle = await context.writeResource(
           "ocr",
-          a.name ?? instanceName(image),
+          instanceName(image, a.name),
           OcrSchema.parse({
             image,
             prompt: a.prompt,

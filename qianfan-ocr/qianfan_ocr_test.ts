@@ -59,6 +59,29 @@ async function call(
   return test.getWrittenResources();
 }
 
+/** Run a method expecting it to fail; the error and what it logged. */
+async function callFailing(
+  f: Fixture,
+  method: MethodName,
+  args: Record<string, unknown>,
+) {
+  const test = createModelTestContext({
+    globalArgs: { uvPath: f.fake.uvPath },
+    methodName: method,
+    repoDir: f.repoDir,
+  });
+  const context = {
+    ...test.context,
+    extensionFile: (path: string) => `/ext/qianfan-ocr/${path}`,
+  };
+  const error = await assertRejects(() =>
+    // deno-lint-ignore no-explicit-any
+    (behavior.methods[method].execute as any)(args, context)
+  );
+  const logs = test.getLogs().map((l) => JSON.stringify(l)).join("\n");
+  return { error: error as Error, logs };
+}
+
 async function withFixture(
   controls: Record<string, string>,
   body: (f: Fixture) => Promise<void>,
@@ -81,7 +104,7 @@ Deno.test("extract runs the helper offline on the image and records what it read
         maxNewTokens: 256,
       });
       assertEquals(written.specName, "ocr");
-      assertEquals(written.name, "My-Scan-1");
+      assertEquals(written.name, "ocr-My-Scan-1");
       assertEquals(written.data.parsed, { title: "Swamp" });
       assertEquals(written.data.parsedOk, true);
       assertEquals(written.data.image, `${f.repoDir}/scans/My Scan (1).png`);
@@ -98,16 +121,11 @@ Deno.test("extract runs the helper offline on the image and records what it read
         "--script",
         "/ext/qianfan-ocr/helper/qianfan_ocr.py",
         "extract",
-        "--image",
-        `${f.repoDir}/scans/My Scan (1).png`,
-        "--prompt",
-        "Read the title",
-        "--model",
-        DEFAULT_MODEL,
-        "--revision",
-        DEFAULT_REVISION,
-        "--max-new-tokens",
-        "256",
+        `--image=${f.repoDir}/scans/My Scan (1).png`,
+        "--prompt=Read the title",
+        `--model=${DEFAULT_MODEL}`,
+        `--revision=${DEFAULT_REVISION}`,
+        "--max-new-tokens=256",
       ]);
     },
   );
@@ -128,7 +146,7 @@ Deno.test("extract records parsedOk false when the output held no JSON object", 
         prompt: "Read the title",
         name: "title-page",
       });
-      assertEquals(written.name, "title-page");
+      assertEquals(written.name, "ocr-title-page");
       assertEquals(written.data.parsed, null);
       assertEquals(written.data.parsedOk, false);
     },
@@ -145,13 +163,50 @@ Deno.test("extract of a missing image fails before running uv", async () => {
   });
 });
 
-Deno.test("extract passes on the helper's run install error", async () => {
+Deno.test("extract passes on the helper's run install error and logs its stderr", async () => {
   await withFixture({ FAKE_UV_RUN: "helper-error" }, async (f) => {
-    const error = await assertRejects(() =>
-      call(f, "extract", { imagePath: "scans/My Scan (1).png", prompt: "Hi" })
-    );
-    assertStringIncludes((error as Error).message, "run install");
+    const { error, logs } = await callFailing(f, "extract", {
+      imagePath: "scans/My Scan (1).png",
+      prompt: "Hi",
+    });
+    assertStringIncludes(error.message, "run install");
+    assertStringIncludes(logs, "Reading");
+    assertStringIncludes(logs, "qianfan-ocr helper started");
   });
+});
+
+Deno.test("an ocr result never takes the install record's name", async () => {
+  await withFixture(
+    { FAKE_UV_STDOUT: JSON.stringify(EXTRACTED) },
+    async (f) => {
+      await Deno.writeFile(`${f.repoDir}/install.png`, new Uint8Array([1]));
+      const [fromStem] = await call(f, "extract", {
+        imagePath: "install.png",
+        prompt: "Hi",
+      });
+      const [fromName] = await call(f, "extract", {
+        imagePath: "install.png",
+        prompt: "Hi",
+        name: "install",
+      });
+      assertEquals(fromStem.name, "ocr-install");
+      assertEquals(fromName.name, "ocr-install");
+    },
+  );
+});
+
+Deno.test("a prompt that starts with a dash reaches the helper as the prompt", async () => {
+  await withFixture(
+    { FAKE_UV_STDOUT: JSON.stringify(EXTRACTED) },
+    async (f) => {
+      await call(f, "extract", {
+        imagePath: "scans/My Scan (1).png",
+        prompt: "-Transcribe",
+      });
+      const [run] = await fakeUvCalls(f.fake);
+      assertEquals(run.argv.includes("--prompt=-Transcribe"), true);
+    },
+  );
 });
 
 Deno.test("install reports already installed when the environment and model were both there", async () => {
@@ -168,6 +223,7 @@ Deno.test("install reports already installed when the environment and model were
     async (f) => {
       const [written] = await call(f, "install", {});
       assertEquals(written.specName, "install");
+      assertEquals(written.name, "install");
       assertEquals(written.data.environmentExisted, true);
       assertEquals(written.data.modelAlreadyCached, true);
       assertEquals(written.data.alreadyInstalled, true);
@@ -175,12 +231,10 @@ Deno.test("install reports already installed when the environment and model were
       const calls = await fakeUvCalls(f.fake);
       assertEquals(calls[0].argv.slice(0, 2), ["python", "find"]);
       assertEquals(calls[1].argv.includes("--offline"), false);
-      assertEquals(calls[1].argv.slice(-5), [
+      assertEquals(calls[1].argv.slice(-3), [
         "install",
-        "--model",
-        DEFAULT_MODEL,
-        "--revision",
-        DEFAULT_REVISION,
+        `--model=${DEFAULT_MODEL}`,
+        `--revision=${DEFAULT_REVISION}`,
       ]);
     },
   );
