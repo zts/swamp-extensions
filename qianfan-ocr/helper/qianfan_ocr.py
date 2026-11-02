@@ -18,10 +18,18 @@ Subcommands print one JSON object on stdout; progress goes to stderr.
            [--max-new-tokens N]
       Read the image with the model. Never downloads: a model that is not
       fully cached is an error that says to run install.
+  extract-batch  --requests PATH [--model ID] [--revision SHA]
+      Read many images with one load of the model. PATH is a JSON list of
+      {"id", "image", "prompt", "maxNewTokens"}. Prints JSON lines instead of
+      one object: {"type": "start", ...}, then one {"type": "item", "id", ...}
+      per image as it finishes (with "error" for an image that failed), then
+      {"type": "end", "count"}. Each line is flushed as it is written, so a
+      crash keeps the items that finished. Never downloads, like extract.
 
 The first line on stderr is always STARTED, so the caller can tell a failure
 of this script from uv failing before it ran. A handled error prints
-{"error": "..."} on stdout and exits 1.
+{"error": "..."} on stdout and exits 1; for extract-batch, only before its
+start line.
 
 torch, transformers, PIL and huggingface_hub are imported inside functions, so
 the module and its tests import with the standard library only.
@@ -134,61 +142,76 @@ def install(model_id, revision):
     }
 
 
-def extract(image, prompt, model_id, revision, max_new_tokens):
-    if not Path(image).is_file():
-        raise HelperError(f"image not found: {image}")
-    path = cached_snapshot(model_id, revision)
-
+def load_model(path):
+    """Load the cached snapshot at path onto the best device; what generate_one needs."""
     import torch
-    from PIL import Image
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
     device, dtype_name = pick_device(
         torch.backends.mps.is_available(), torch.cuda.is_available()
     )
-    dtype = getattr(torch, dtype_name)
+    print(f"loading {path} on {device} ({dtype_name})", file=sys.stderr, flush=True)
+    model = (
+        AutoModelForImageTextToText.from_pretrained(path, dtype=getattr(torch, dtype_name))
+        .to(device)
+        .eval()
+    )
+    # The model's config.json has no transformers_version, so transformers
+    # cannot rule out a Mistral tokenizer from a local path and warns about
+    # Mistral's regex. The tokenizer is Qwen2's; fix_mistral_regex=True
+    # would swap in Mistral's pre-tokenizer regex, so say False.
+    processor = AutoProcessor.from_pretrained(path, fix_mistral_regex=False)
+    return {"model": model, "processor": processor, "device": device, "dtype": dtype_name}
+
+
+def generate_one(loaded, image, prompt, max_new_tokens):
+    """The model's answer for one image and prompt, and the milliseconds it took."""
+    import torch
+    from PIL import Image
+
+    model, processor, device = loaded["model"], loaded["processor"], loaded["device"]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": Image.open(image).convert("RGB")},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+    inputs = processor.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    ).to(device)
+
+    print("generating", file=sys.stderr, flush=True)
+    start = time.monotonic()
+    with torch.no_grad():
+        output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+    generated = output_ids[:, inputs["input_ids"].shape[1] :]
+    raw = processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
+    return raw, int((time.monotonic() - start) * 1000)
+
+
+def extract(image, prompt, model_id, revision, max_new_tokens):
+    if not Path(image).is_file():
+        raise HelperError(f"image not found: {image}")
+    path = cached_snapshot(model_id, revision)
 
     with model_lock(lock_path()) as waited:
-        print(f"loading {model_id} on {device} ({dtype_name})", file=sys.stderr, flush=True)
         load_start = time.monotonic()
-        model = AutoModelForImageTextToText.from_pretrained(path, dtype=dtype).to(device).eval()
-        # The model's config.json has no transformers_version, so transformers
-        # cannot rule out a Mistral tokenizer from a local path and warns about
-        # Mistral's regex. The tokenizer is Qwen2's; fix_mistral_regex=True
-        # would swap in Mistral's pre-tokenizer regex, so say False.
-        processor = AutoProcessor.from_pretrained(path, fix_mistral_regex=False)
+        loaded = load_model(path)
         load_ms = int((time.monotonic() - load_start) * 1000)
-
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": Image.open(image).convert("RGB")},
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ]
-        inputs = processor.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt",
-        ).to(device)
-
-        print("generating", file=sys.stderr, flush=True)
-        gen_start = time.monotonic()
-        with torch.no_grad():
-            output_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-        generated = output_ids[:, inputs["input_ids"].shape[1] :]
-        raw = processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
-        generate_ms = int((time.monotonic() - gen_start) * 1000)
+        raw, generate_ms = generate_one(loaded, image, prompt, max_new_tokens)
 
     return {
         "model": model_id,
         "revision": revision,
-        "device": device,
-        "dtype": dtype_name,
+        "device": loaded["device"],
+        "dtype": loaded["dtype"],
         "prompt": prompt,
         "rawOutput": raw,
         "parsed": parse_model_json(raw),
@@ -196,6 +219,82 @@ def extract(image, prompt, model_id, revision, max_new_tokens):
         "loadMs": load_ms,
         "generateMs": generate_ms,
     }
+
+
+def read_requests(path):
+    """The validated list of extract-batch requests in the JSON file at path."""
+    try:
+        requests = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise HelperError(f"cannot read requests file {path}: {error}") from error
+    if not isinstance(requests, list):
+        raise HelperError("requests file must hold a list of requests")
+    if not requests:
+        raise HelperError("requests file must hold at least one request")
+    seen = set()
+    for request in requests:
+        if not isinstance(request, dict):
+            raise HelperError("each request must be an object")
+        for key, kind in (("id", str), ("image", str), ("prompt", str), ("maxNewTokens", int)):
+            if not isinstance(request.get(key), kind):
+                raise HelperError(f"request {request.get('id')!r} needs {key}")
+        if request["id"] in seen:
+            raise HelperError(f"duplicate id in requests: {request['id']}")
+        seen.add(request["id"])
+    return requests
+
+
+def extract_batch(requests, model_id, revision, emit):
+    """Read every request with one load of the model, emitting a line per item.
+
+    An image that is missing or fails to generate is reported on its own
+    item; the rest still run. The model not being cached fails before the
+    lock is taken or anything is emitted.
+    """
+    path = cached_snapshot(model_id, revision)
+
+    with model_lock(lock_path()) as waited:
+        load_start = time.monotonic()
+        loaded = load_model(path)
+        emit(
+            {
+                "type": "start",
+                "model": model_id,
+                "revision": revision,
+                "device": loaded.get("device"),
+                "dtype": loaded.get("dtype"),
+                "lockWaitMs": waited["ms"],
+                "loadMs": int((time.monotonic() - load_start) * 1000),
+            }
+        )
+        for n, request in enumerate(requests, 1):
+            print(f"item {n} of {len(requests)}", file=sys.stderr, flush=True)
+            item = {"type": "item", "id": request["id"]}
+            if not Path(request["image"]).is_file():
+                emit({**item, "error": f"image not found: {request['image']}"})
+                continue
+            try:
+                raw, generate_ms = generate_one(
+                    loaded, request["image"], request["prompt"], request["maxNewTokens"]
+                )
+            except Exception as error:  # one bad image must not stop the batch
+                emit({**item, "error": f"{type(error).__name__}: {error}"})
+                continue
+            emit(
+                {
+                    **item,
+                    "rawOutput": raw,
+                    "parsed": parse_model_json(raw),
+                    "generateMs": generate_ms,
+                }
+            )
+        emit({"type": "end", "count": len(requests)})
+
+
+def emit_line(obj):
+    """Write one JSON line to stdout and flush it at once."""
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
 
 
 def build_parser():
@@ -212,6 +311,11 @@ def build_parser():
     e.add_argument("--model", default=DEFAULT_MODEL)
     e.add_argument("--revision", default=DEFAULT_REVISION)
     e.add_argument("--max-new-tokens", type=int, default=1024)
+
+    b = sub.add_parser("extract-batch")
+    b.add_argument("--requests", required=True)
+    b.add_argument("--model", default=DEFAULT_MODEL)
+    b.add_argument("--revision", default=DEFAULT_REVISION)
     return parser
 
 
@@ -221,6 +325,10 @@ def main(argv=None):
     try:
         if args.command == "install":
             result = install(args.model, args.revision)
+        elif args.command == "extract-batch":
+            requests = read_requests(args.requests)
+            extract_batch(requests, args.model, args.revision, emit_line)
+            return 0
         else:
             result = extract(
                 args.image, args.prompt, args.model, args.revision, args.max_new_tokens
