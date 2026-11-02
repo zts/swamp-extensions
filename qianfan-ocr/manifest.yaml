@@ -1,0 +1,28 @@
+manifestVersion: 1
+name: "@zts/qianfan-ocr"
+version: "2026.11.02.1"
+license: MIT
+repository: https://github.com/zts/swamp-extensions
+description: >-
+  Run the Qianfan-OCR vision-language model (baidu/Qianfan-OCR) locally to
+  read text or structured details from an image, with a prompt you give.
+  install builds the Python environment with uv and downloads the model at a
+  pinned revision ahead of time; extract reads one image and never downloads,
+  so a run never stalls on a multi-GB fetch. Runs on Apple silicon (MPS),
+  CUDA or CPU, and takes turns on the model across the machine. Needs uv.
+paths:
+  base: manifest
+behaviors:
+  - qianfan_ocr.ts
+binaries:
+  - helper/qianfan_ocr.py
+  - helper/qianfan_ocr.py.lock
+additionalFiles:
+  - README.md
+  - LICENSE.txt
+labels:
+  - ocr
+  - vision
+  - qianfan
+  - huggingface
+  - local-model
