@@ -279,10 +279,10 @@ Deno.test("scan fails, naming the ocr behavior and how to set it up, when qianfa
     const { error, resources, files } = await runFailing(repoDir, "scan", SCAN, {
       runModel: () => ({
         ok: false,
-        error: { message: "No definition found: qianfan-ocr" },
+        error: { message: 'Definition "qianfan-ocr" not found.' },
       }),
     });
-    assertStringIncludes(error.message, "No definition found: qianfan-ocr");
+    assertStringIncludes(error.message, 'Definition "qianfan-ocr" not found. If');
     assertStringIncludes(error.message, "swamp behavior create @zts/qianfan-ocr qianfan-ocr");
     assertStringIncludes(error.message, "swamp behavior run qianfan-ocr install");
     assertEquals(resources, []);

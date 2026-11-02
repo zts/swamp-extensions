@@ -233,7 +233,9 @@ async function extract(
   });
   if (!result.ok) {
     throw new Error(
-      `qianfan-ocr behavior '${ocrBehavior}' failed: ${result.error.message}. ` +
+      `qianfan-ocr behavior '${ocrBehavior}' failed: ${
+        result.error.message.replace(/\.$/, "")
+      }. ` +
         `If it does not exist yet, create and install it: ` +
         `swamp behavior create @zts/qianfan-ocr ${ocrBehavior}, then ` +
         `swamp behavior run ${ocrBehavior} install`,

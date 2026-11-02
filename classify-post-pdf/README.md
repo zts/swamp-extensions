@@ -98,9 +98,10 @@ that differ only in punctuation.
 
 ## What to expect
 
-- **Each letter loads the model again.** That is most of a scan's time: about
-  50s a letter on this author's Mac. Scans take turns on the model across the
-  machine.
+- **Each letter loads the model again.** On this author's Mac (MPS), reading
+  the sample letter took 14s to load the model and 14s to read it, 49s for the
+  whole `swamp behavior run`; the workflow read two letters in 52s. Scans take
+  turns on the model across the machine.
 - **Local only.** `scan` calls qianfan-ocr through swamp's `runModel`, which
   remote workers do not offer.
 - **qianfan-ocr keeps its own record** of each read, under its own behavior.
