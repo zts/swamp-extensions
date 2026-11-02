@@ -268,7 +268,7 @@ export const behavior = {
       description: "Key details read from the top of a scanned letter",
       schema: DetailsSchema,
       lifetime: "infinite",
-      garbageCollection: "infinite",
+      garbageCollection: 100,
     },
     "pdfList": {
       description: "PDFs found in a directory, for a workflow to scan",
@@ -282,7 +282,7 @@ export const behavior = {
       description: "The rendered region of the letter that was read",
       contentType: "image/png",
       lifetime: "infinite",
-      garbageCollection: "infinite",
+      garbageCollection: 100,
     },
   },
   methods: {

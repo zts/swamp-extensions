@@ -1,0 +1,33 @@
+manifestVersion: 1
+name: "@zts/classify-post-pdf"
+version: "2026.11.02.1"
+license: MIT
+repository: https://github.com/zts/swamp-extensions
+description: >-
+  Read the key details off a scanned letter (PDF): sender, date, recipient
+  and address, document type (bill, statement, invoice, reminder, notice or
+  other), reference numbers and other facts. scan renders the top of a page
+  in-process with PDFium (WebAssembly) and has an installed @zts/qianfan-ocr
+  behavior read it, all on this machine. listPdfs and the scan-mail workflow
+  read a whole directory of post.
+paths:
+  base: manifest
+behaviors:
+  - classify_post_pdf.ts
+workflows:
+  - workflows/scan-mail.yaml
+dependencies:
+  - "@zts/qianfan-ocr"
+additionalFiles:
+  - README.md
+  - LICENSE.txt
+platforms:
+  - darwin-aarch64
+  - linux-x86_64
+  - linux-aarch64
+labels:
+  - ocr
+  - pdf
+  - mail
+  - letters
+  - local-model
