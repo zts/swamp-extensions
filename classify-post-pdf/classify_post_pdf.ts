@@ -39,6 +39,9 @@ export const DEFAULT_PROMPT =
 
 const NAME = /^[A-Za-z0-9_-]+$/;
 
+/** Most characters of a file stem kept in a record name. */
+const MAX_STEM = 64;
+
 const GlobalArgsSchema = z.object({
   ocrBehavior: z.string().regex(NAME).default("qianfan-ocr").describe(
     "Name of the @zts/qianfan-ocr behavior that reads the image; create and install it first",
@@ -122,7 +125,10 @@ interface DataHandle {
 interface Context {
   globalArgs: GlobalArgs;
   repoDir: string;
-  logger: { info(message: string, props?: Record<string, unknown>): void };
+  logger: {
+    info(message: string, props?: Record<string, unknown>): void;
+    warning(message: string, props?: Record<string, unknown>): void;
+  };
   writeResource(
     specName: string,
     name: string,
@@ -155,10 +161,12 @@ export async function contentHash(
  * The name a PDF's records take: its file stem in safe characters and the
  * first 16 hex of its content hash. Scanning the same file again adds a
  * version; another letter saved under a reused name gets its own record.
+ * The stem is cut to MAX_STEM characters so the name stays a valid file name.
  */
 export function instanceName(pdfPath: string, hash: string): string {
   const stem = pdfPath.split("/").pop()!.replace(/\.pdf$/i, "")
-    .replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+    .replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, MAX_STEM)
+    .replace(/^-+|-+$/g, "");
   return `${stem || "letter"}-${hash.slice(0, 16)}`;
 }
 
@@ -307,23 +315,28 @@ export const behavior = {
           }
         }
         files.sort((x, y) => x.path.localeCompare(y.path));
+        // Two files share a record only when they hold the same bytes under
+        // names that clean up alike, so scanning one of them is enough.
         const byName = new Map<string, string>();
-        for (const f of files) {
-          const other = byName.get(f.name);
-          if (other) {
-            throw new Error(
-              `${other} and ${f.path} are the same file under names that map to ${f.name}; remove one`,
+        const unique = files.filter((f) => {
+          const kept = byName.get(f.name);
+          if (kept) {
+            context.logger.warning(
+              "Skipping {skipped}: same contents as {kept}, so it would share record {name}",
+              { skipped: f.path, kept, name: f.name },
             );
+            return false;
           }
           byName.set(f.name, f.path);
-        }
+          return true;
+        });
         const handle = await context.writeResource("pdfList", "pdf-list", {
           directory,
-          files,
+          files: unique,
           listedAt: new Date().toISOString(),
         });
         context.logger.info("Found {count} PDFs in {directory}", {
-          count: files.length,
+          count: unique.length,
           directory,
         });
         return { dataHandles: [handle] };

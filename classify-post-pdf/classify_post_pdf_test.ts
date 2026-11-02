@@ -138,6 +138,7 @@ async function run(
   await (behavior.methods[method].execute as any)(args, context);
   return {
     resources: test.getWrittenResources(),
+    logs: test.getLogs().map((l) => JSON.stringify(l)).join("\n"),
     files: test.getWrittenFiles(),
     seen,
   };
@@ -276,7 +277,7 @@ Deno.test("scanning the same file again writes a new version of the same records
 
 Deno.test("scan fails, naming the ocr behavior and how to set it up, when qianfan-ocr fails", async () => {
   await withRepo(async (repoDir) => {
-    const { error, resources, files } = await runFailing(repoDir, "scan", SCAN, {
+    const { error, resources, files , seen } = await runFailing(repoDir, "scan", SCAN, {
       runModel: () => ({
         ok: false,
         error: { message: 'Definition "qianfan-ocr" not found.' },
@@ -287,6 +288,11 @@ Deno.test("scan fails, naming the ocr behavior and how to set it up, when qianfa
     assertStringIncludes(error.message, "swamp behavior run qianfan-ocr install");
     assertEquals(resources, []);
     assertEquals(files, []);
+    // The temporary image is removed on failure too.
+    assertEquals(
+      await Deno.stat(seen.imagePaths[0]).then(() => true, () => false),
+      false,
+    );
   });
 });
 
@@ -371,15 +377,19 @@ Deno.test("listPdfs lists the PDFs in a directory, sorted, with their record nam
   });
 });
 
-Deno.test("listPdfs refuses two files that would share a record", async () => {
+Deno.test("listPdfs keeps one of two files that would share a record, and says which it skipped", async () => {
   await withRepo(async (repoDir) => {
     await Deno.writeFile(`${repoDir}/post/Water-Bill-Oct.pdf`, SAMPLE);
-    const { error, resources } = await runFailing(repoDir, "listPdfs", {
+    await Deno.writeFile(`${repoDir}/post/other.pdf`, SAMPLE.slice(0, 100));
+    const { resources, logs } = await run(repoDir, "listPdfs", {
       directory: "post",
     });
-    assertStringIncludes(error.message, "Water-Bill-Oct.pdf");
-    assertStringIncludes(error.message, "Water Bill (Oct).pdf");
-    assertEquals(resources, []);
+    const files = resources[0].data.files as { path: string; name: string }[];
+    assertEquals(files.length, 2);
+    assertEquals(files.filter((f) => f.name === NAME).length, 1);
+    assertStringIncludes(logs, "Water-Bill-Oct.pdf");
+    assertStringIncludes(logs, "Water Bill (Oct).pdf");
+    assertStringIncludes(logs, "Skipping");
   });
 });
 
@@ -390,6 +400,17 @@ Deno.test("instanceName is the safe file stem and the first 16 hex of the conten
     assertMatch(instanceName(path, hash), /^[A-Za-z0-9_-]+$/);
   }
   assertEquals(instanceName("/p/ .pdf", hash), "letter-0123456789abcdef");
+});
+
+Deno.test("instanceName keeps at most 64 characters of the stem", () => {
+  const hash = "0123456789abcdef".repeat(4);
+  const name = instanceName(`/p/${"a".repeat(250)}.pdf`, hash);
+  assertEquals(name, `${"a".repeat(64)}-0123456789abcdef`);
+  // A cut that ends on a separator does not leave a trailing hyphen.
+  assertEquals(
+    instanceName(`/p/${"b".repeat(63)} c.pdf`, hash),
+    `${"b".repeat(63)}-0123456789abcdef`,
+  );
 });
 
 Deno.test("contentHash is the SHA-256 of the bytes in hex", async () => {
