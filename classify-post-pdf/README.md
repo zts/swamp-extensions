@@ -68,8 +68,8 @@ The workflow lists the PDFs with `listPdfs`, then scans each, using the
 `classify-post-pdf` behavior created above (or creating it if it is missing). A
 letter that fails does not stop the rest. Symlinks to PDFs are followed; a
 broken link is skipped with a warning. Each run keeps its list as
-`pdf-list-<run id>`, so runs started together each scan their own directory;
-these small records are kept, one per run.
+`pdf-list-<run id>`, so runs started together each scan their own directory.
+These lists expire after 7 days, and `swamp data gc` removes them.
 
 ## What it records
 

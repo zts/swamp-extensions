@@ -286,7 +286,8 @@ export const behavior = {
     "pdfList": {
       description: "PDFs found in a directory, for a workflow to scan",
       schema: PdfListSchema,
-      lifetime: "infinite",
+      // Each workflow run writes its own list and reads it seconds later.
+      lifetime: "7d",
       garbageCollection: 10,
     },
   },
