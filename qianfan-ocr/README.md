@@ -17,8 +17,10 @@ installed.
 - macOS on Apple silicon, or Linux (x86_64 or aarch64). torch has no wheels for
   Intel Macs, and the helper's lock file needs POSIX `flock`, so not Windows.
 - uv on `PATH`, or at `uvPath`.
-- Disk: the model is about 9.5GB in the Hugging Face cache, and the Python
-  environment (torch, transformers) about 800MB.
+- Disk: the model is about 9.5GB in the Hugging Face cache. The Python
+  environment (torch, transformers) is about 800MB on Apple silicon. On Linux
+  x86_64, torch brings the NVIDIA CUDA libraries: about 3GB to download and
+  several GB more once installed.
 - Memory: loading the model takes about 10GB. On Apple silicon it runs on MPS,
   on NVIDIA on CUDA, and otherwise on the CPU (slowly).
 
@@ -35,7 +37,7 @@ skips whatever is already there, so run it as often as you like, and run it
 again after each `swamp extension update`. On this author's Mac the first
 install took 1.5s with the model already downloaded and uv's cache already
 holding torch, and a repeat took 0.4s. From nothing, expect to download about
-10GB.
+10GB (13GB on Linux x86_64).
 
 ```sh
 swamp behavior run ocr extract \
@@ -48,7 +50,9 @@ swamp behavior run ocr extract \
   --input name=invoice-0042
 ```
 
-Each `extract` writes an `ocr` resource named after the image (or `name`):
+Each `extract` writes an `ocr` resource named `ocr-` and the image file's stem
+(or `ocr-` and `name`), so `scans/page-1.png` becomes `ocr-page-1`. `install`
+writes one resource, `install`.
 
 | Field                  | What                                            |
 | ---------------------- | ----------------------------------------------- |
@@ -87,6 +91,11 @@ newer one, and run `install` with it first.
   holds a lock file (`~/.cache/qianfan-ocr/model.lock`) across the whole
   machine, so runs from other instances or repos queue rather than load several
   copies at once.
+- **Aborting a run stops the model.** Cancelling the swamp run stops uv and the
+  Python process with it, and the model lock is released.
+- **The model's tokenizer is Qwen2's.** The helper loads it with
+  `fix_mistral_regex=False`, which silences a transformers warning that misreads
+  the model as a Mistral one; setting it to true would break tokenization.
 - **Output varies by device.** MPS, CUDA and CPU can give slightly different
   answers to the same prompt.
 - **The `ocr` resource keeps the prompt and the full answer** in the swamp
