@@ -427,7 +427,13 @@ export const behavior = {
               { offline: true, onStderr: logHelper(context) },
             );
           } finally {
-            await Deno.remove(tmpDir, { recursive: true });
+            // A temp dir left behind must not hide what the helper read.
+            await Deno.remove(tmpDir, { recursive: true }).catch((error) =>
+              context.logger.warning(
+                "Could not remove the batch's temp dir {tmpDir}: {error}",
+                { tmpDir, error: String(error) },
+              )
+            );
           }
           const results = run.lines.filter((l) => l.type === "item");
           // Before any item, a failure leaves nothing to keep, as in extract.
@@ -448,24 +454,34 @@ export const behavior = {
                 !Array.isArray(line.parsed)
               ? line.parsed as Record<string, unknown>
               : null;
+            const record = OcrSchema.safeParse({
+              image: items[i].image,
+              prompt: items[i].prompt,
+              rawOutput: line.rawOutput,
+              parsed,
+              parsedOk: parsed !== null,
+              model: a.model,
+              revision: a.revision,
+              device: start?.device,
+              dtype: start?.dtype,
+              lockWaitMs: start?.lockWaitMs,
+              loadMs: start?.loadMs,
+              generateMs: line.generateMs,
+              extractedAt: new Date().toISOString(),
+            });
+            // Only a helper bug gets here; failing would strand the records
+            // already written without the batch record that names them.
+            if (!record.success) {
+              outcomes[i].status = "error";
+              outcomes[i].error = `the helper printed a malformed result: ${
+                z.prettifyError(record.error).replaceAll("\n", " ")
+              }`;
+              continue;
+            }
             const handle = await context.writeResource(
               "ocr",
               items[i].name,
-              OcrSchema.parse({
-                image: items[i].image,
-                prompt: items[i].prompt,
-                rawOutput: line.rawOutput,
-                parsed,
-                parsedOk: parsed !== null,
-                model: a.model,
-                revision: a.revision,
-                device: start?.device,
-                dtype: start?.dtype,
-                lockWaitMs: start?.lockWaitMs,
-                loadMs: start?.loadMs,
-                generateMs: line.generateMs,
-                extractedAt: new Date().toISOString(),
-              }),
+              record.data,
             );
             handles.push(handle);
             Object.assign(outcomes[i], {

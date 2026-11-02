@@ -676,3 +676,88 @@ Deno.test("extractBatch with every image missing writes only the batch record", 
     assertExists(logs.find((l) => l.level === "warning"));
   });
 });
+
+Deno.test("extractBatch records a malformed item line as that item's error and still writes the batch", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(
+        START,
+        item("0", "a"),
+        { type: "item", id: "1", parsed: null },
+        item("2", "c"),
+        { type: "end", count: 3 },
+      ),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { written, error } = await run(f, "extractBatch", {
+        items: ITEMS,
+      });
+      assertEquals(error, null);
+      assertEquals(
+        written.filter((w) => w.specName === "ocr").map((w) => w.name),
+        ["ocr-a", "ocr-letter-c"],
+      );
+      const batch = batchRecord(written).data;
+      assertEquals(batch.items[1].status, "error");
+      assertStringIncludes(batch.items[1].error, "malformed");
+      assertEquals(batch.items[1].record, null);
+    },
+  );
+});
+
+Deno.test("extractBatch records items as errors when the helper printed no start line", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(item("0", "a"), { type: "end", count: 1 }),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { written, error } = await run(f, "extractBatch", {
+        items: [ITEMS[0]],
+      });
+      assertEquals(error, null);
+      assertEquals(written.map((w) => w.specName), ["batch"]);
+      assertStringIncludes(
+        batchRecord(written).data.items[0].error,
+        "malformed",
+      );
+    },
+  );
+});
+
+Deno.test("extractBatch still writes its records when removing its temp dir fails", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(START, item("0", "a"), {
+        type: "end",
+        count: 1,
+      }),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const remove = Deno.remove;
+      const kept: string[] = [];
+      Deno.remove = (path, options) => {
+        if (!String(path).includes("qianfan-ocr-")) {
+          return remove(path, options);
+        }
+        kept.push(String(path));
+        return Promise.reject(new Error("resource busy"));
+      };
+      try {
+        const { written, error, logs } = await run(f, "extractBatch", {
+          items: [ITEMS[0]],
+        });
+        assertEquals(error, null);
+        assertEquals(written.map((w) => w.specName), ["ocr", "batch"]);
+        const warning = logs.find((l) => l.level === "warning");
+        assertExists(warning);
+        assertStringIncludes(warning.message, "temp");
+      } finally {
+        Deno.remove = remove;
+        for (const path of kept) await remove(path, { recursive: true });
+      }
+    },
+  );
+});
