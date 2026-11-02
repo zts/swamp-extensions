@@ -4,16 +4,21 @@
 //
 // Controls, read from the environment the test's shim sets:
 //   FAKE_UV_CALLS   file to append each invocation to, as a JSON line of
-//                   {argv, HF_HOME, HF_HUB_OFFLINE}
+//                   {argv, HF_HOME, HF_HUB_OFFLINE, requests}, where requests
+//                   is the parsed --requests file, read while it still exists
 //   FAKE_UV_ENV     "present" (default) | "absent": what python find prints
 //   FAKE_UV_RUN     "ok" (default) | "uv-fail" | "helper-error" | "crash" |
-//                   "garbage" | "hang": how run behaves
-//   FAKE_UV_STDOUT  the JSON run prints on "ok"
+//                   "garbage" | "hang" | "lines-then-crash" | "torn": how
+//                   run behaves
+//   FAKE_UV_STDOUT  what run prints on "ok", "lines-then-crash" and "torn"
+//                   (one JSON object, or JSON lines); "lines-then-crash"
+//                   then dies, and "torn" then dies mid-line
 const STARTED = "qianfan-ocr helper started";
 
 const args = Deno.args;
 const env = (name: string) => Deno.env.get(name);
 
+const requestsArg = args.find((a) => a.startsWith("--requests="));
 const calls = env("FAKE_UV_CALLS");
 if (calls) {
   await Deno.writeTextFile(
@@ -22,6 +27,11 @@ if (calls) {
       argv: args,
       HF_HOME: env("HF_HOME") ?? null,
       HF_HUB_OFFLINE: env("HF_HUB_OFFLINE") ?? null,
+      requests: requestsArg
+        ? JSON.parse(
+          await Deno.readTextFile(requestsArg.slice("--requests=".length)),
+        )
+        : null,
     }) + "\n",
     { append: true },
   );
@@ -73,6 +83,17 @@ switch (env("FAKE_UV_RUN") ?? "ok") {
     err(`${STARTED}\n`);
     out("this is not json\n");
     Deno.exit(0);
+    break;
+  case "lines-then-crash":
+    err(`${STARTED}\nloading model\n`);
+    out(`${env("FAKE_UV_STDOUT") ?? ""}\n`);
+    err("Killed: 9\n");
+    Deno.exit(137);
+    break;
+  case "torn":
+    err(`${STARTED}\n`);
+    out(`${env("FAKE_UV_STDOUT") ?? ""}\n{"type": "item", "id": "to`);
+    Deno.exit(137);
     break;
   case "hang":
     err(`${STARTED}\n`);

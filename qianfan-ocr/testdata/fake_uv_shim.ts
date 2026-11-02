@@ -13,6 +13,8 @@ export interface FakeUvCall {
   argv: string[];
   HF_HOME: string | null;
   HF_HUB_OFFLINE: string | null;
+  /** The parsed --requests file, when the call had one. */
+  requests: unknown;
 }
 
 /** Make a fake uv whose behaviour the given FAKE_UV_* controls set. */

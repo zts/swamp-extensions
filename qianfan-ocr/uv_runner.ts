@@ -92,6 +92,51 @@ function jsonObject(text: string): Record<string, unknown> | null {
   }
 }
 
+/** Run one helper subcommand with `uv run --locked --script`. */
+async function uvRun(
+  settings: UvSettings,
+  script: string,
+  args: string[],
+  { offline, onStderr }: RunOptions,
+) {
+  const env: Record<string, string> = {};
+  if (settings.hfHome) env.HF_HOME = settings.hfHome;
+  if (offline) env.HF_HUB_OFFLINE = "1";
+  const run = await uv(settings, [
+    "run",
+    "--quiet",
+    "--locked",
+    ...(offline ? ["--offline"] : []),
+    "--script",
+    script,
+    ...args,
+  ], env);
+  if (run.stderr.trim()) onStderr?.(run.stderr.trim());
+  return run;
+}
+
+/**
+ * Why a run that exited non-zero failed: the helper's own {"error"}, uv
+ * failing before the helper started, or the helper dying after it had.
+ */
+function failure(
+  command: string,
+  code: number,
+  stderr: string,
+  offline: boolean,
+  result: Record<string, unknown> | null,
+): string {
+  if (result && typeof result.error === "string") return result.error;
+  if (!stderr.includes(STARTED)) {
+    return offline
+      ? `Python environment is missing or out of date; run install. uv said:\n${
+        tail(stderr)
+      }`
+      : `uv could not run the helper:\n${tail(stderr)}`;
+  }
+  return `qianfan_ocr.py ${command} failed (exit ${code}):\n${tail(stderr)}`;
+}
+
 /**
  * Run one helper subcommand with `uv run --locked --script`. With offline,
  * uv may not reach the network, so an environment that is missing or out of
@@ -101,21 +146,14 @@ export async function runHelper(
   settings: UvSettings,
   script: string,
   args: string[],
-  { offline, onStderr }: RunOptions,
+  options: RunOptions,
 ): Promise<Record<string, unknown>> {
-  const env: Record<string, string> = {};
-  if (settings.hfHome) env.HF_HOME = settings.hfHome;
-  if (offline) env.HF_HUB_OFFLINE = "1";
-  const { code, stdout, stderr } = await uv(settings, [
-    "run",
-    "--quiet",
-    "--locked",
-    ...(offline ? ["--offline"] : []),
-    "--script",
+  const { code, stdout, stderr } = await uvRun(
+    settings,
     script,
-    ...args,
-  ], env);
-  if (stderr.trim()) onStderr?.(stderr.trim());
+    args,
+    options,
+  );
   const result = jsonObject(stdout.trim());
 
   if (code === 0) {
@@ -129,19 +167,50 @@ export async function runHelper(
     }
     return result;
   }
-  if (result && typeof result.error === "string") {
-    throw new Error(result.error);
-  }
-  if (!stderr.includes(STARTED)) {
-    throw new Error(
-      offline
-        ? `Python environment is missing or out of date; run install. uv said:\n${
-          tail(stderr)
-        }`
-        : `uv could not run the helper:\n${tail(stderr)}`,
-    );
-  }
-  throw new Error(
-    `qianfan_ocr.py ${args[0]} failed (exit ${code}):\n${tail(stderr)}`,
+  throw new Error(failure(args[0], code, stderr, options.offline, result));
+}
+
+/** What a helper subcommand that prints JSON lines wrote, and how it ended. */
+export interface LinesRun {
+  /** Every complete line that held a JSON object, in order. */
+  lines: Record<string, unknown>[];
+  ok: boolean;
+  /** Why the run failed, as runHelper would throw it; null when ok. */
+  error: string | null;
+}
+
+/**
+ * Run a helper subcommand that prints one JSON object per line, as
+ * runHelper does, but keep the lines it wrote even when it fails part way:
+ * the caller decides what to do with them. A line cut off by the helper
+ * dying is dropped. stdout is read when the process exits, so nothing
+ * arrives while it runs.
+ */
+export async function runHelperLines(
+  settings: UvSettings,
+  script: string,
+  args: string[],
+  options: RunOptions,
+): Promise<LinesRun> {
+  const { code, stdout, stderr } = await uvRun(
+    settings,
+    script,
+    args,
+    options,
   );
+  const complete = stdout.endsWith("\n")
+    ? stdout
+    : stdout.slice(0, stdout.lastIndexOf("\n") + 1);
+  const lines = complete.split("\n").map((line) => jsonObject(line.trim()))
+    .filter((line): line is Record<string, unknown> => line !== null);
+  if (code === 0) return { lines, ok: true, error: null };
+  // The helper's {"error"} comes alone, before any line of results.
+  const errorLine = lines.length === 1 && !("type" in lines[0])
+    ? lines[0]
+    : null;
+  return {
+    lines: errorLine ? [] : lines,
+    ok: false,
+    error: failure(args[0], code, stderr, options.offline, errorLine),
+  };
 }
