@@ -30,7 +30,7 @@ swamp behavior create @zts/qianfan-ocr qianfan-ocr
 swamp behavior run qianfan-ocr install
 
 swamp extension pull @zts/classify-post-pdf
-swamp behavior create @zts/classify-post-pdf post
+swamp behavior create @zts/classify-post-pdf classify-post-pdf
 ```
 
 If your qianfan-ocr behavior has another name, pass it as the global argument
@@ -42,7 +42,7 @@ This was tested with `@zts/qianfan-ocr` 2026.11.02.1.
 ## Usage
 
 ```sh
-swamp behavior run post scan --input pdfPath=scans/letter.pdf
+swamp behavior run classify-post-pdf scan --input pdfPath=scans/letter.pdf
 ```
 
 | Input          | Default        | What                                |
@@ -64,8 +64,9 @@ To read a whole directory, one letter at a time:
 swamp workflow run @zts/classify-post-pdf/scan-mail --input directory=scans
 ```
 
-The workflow lists the PDFs with `listPdfs`, then scans each. A letter that
-fails does not stop the rest.
+The workflow lists the PDFs with `listPdfs`, then scans each, using the
+`classify-post-pdf` behavior created above (or creating it if it is missing).
+A letter that fails does not stop the rest.
 
 ## What it records
 
@@ -92,9 +93,10 @@ and `header-Water-bill-1a2b3c4d5e6f7a8b`:
 
 Scanning the same file again adds a version to its records (100 are kept). A
 different letter saved under a reused name, such as a scanner's `scan0001.pdf`,
-gets its own records, because its contents differ. `listPdfs` refuses a
-directory where two files would share records: the same contents under names
-that differ only in punctuation.
+gets its own records, because its contents differ. Two files share records
+only when they hold the same contents under names that differ only in
+punctuation; `listPdfs` keeps the first and logs a warning naming the one it
+skipped. Names keep at most 64 characters of the file name.
 
 ## What to expect
 
