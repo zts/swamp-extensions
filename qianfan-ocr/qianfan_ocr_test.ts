@@ -258,3 +258,40 @@ Deno.test("install looks for the environment before uv builds it", async () => {
     },
   );
 });
+
+Deno.test("install and extract each log when they finish", async () => {
+  await withFixture(
+    { FAKE_UV_STDOUT: JSON.stringify(EXTRACTED) },
+    async (f) => {
+      const lastLog = async (
+        method: MethodName,
+        args: Record<string, unknown>,
+      ) => {
+        const test = createModelTestContext({
+          globalArgs: { uvPath: f.fake.uvPath },
+          methodName: method,
+          repoDir: f.repoDir,
+        });
+        const context = {
+          ...test.context,
+          extensionFile: (path: string) => `/ext/qianfan-ocr/${path}`,
+        };
+        // deno-lint-ignore no-explicit-any
+        await (behavior.methods[method].execute as any)(args, context);
+        return test.getLogs().at(-1)!;
+      };
+      const installed = await lastLog("install", {});
+      assertStringIncludes(installed.message, "Installed");
+
+      const wrote = await lastLog("extract", {
+        imagePath: "scans/My Scan (1).png",
+        prompt: "Hi",
+      });
+      assertStringIncludes(wrote.message, "Wrote");
+      assertEquals(
+        (wrote.args[0] as Record<string, unknown>).name,
+        "ocr-My-Scan-1",
+      );
+    },
+  );
+});

@@ -187,6 +187,15 @@ export const behavior = {
           alreadyInstalled: environmentExisted && modelAlreadyCached,
           installedAt: new Date().toISOString(),
         });
+        context.logger.info(
+          "Installed {model}@{revision} (environment existed: {environmentExisted}, model already cached: {modelAlreadyCached})",
+          {
+            model: a.model,
+            revision: a.revision,
+            environmentExisted,
+            modelAlreadyCached,
+          },
+        );
         return { dataHandles: [handle] };
       },
     },
@@ -245,6 +254,17 @@ export const behavior = {
             generateMs: result.generateMs,
             extractedAt: new Date().toISOString(),
           }),
+        );
+        context.logger.info(
+          "Wrote {name} on {device}: waited {lockWaitMs}ms, loaded in {loadMs}ms, generated in {generateMs}ms, parsed JSON: {parsedOk}",
+          {
+            name: handle.name,
+            device: result.device,
+            lockWaitMs: result.lockWaitMs,
+            loadMs: result.loadMs,
+            generateMs: result.generateMs,
+            parsedOk: parsed !== null,
+          },
         );
         return { dataHandles: [handle] };
       },
