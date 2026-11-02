@@ -20,6 +20,10 @@ binaries:
 additionalFiles:
   - README.md
   - LICENSE.txt
+platforms:
+  - darwin-aarch64
+  - linux-x86_64
+  - linux-aarch64
 labels:
   - ocr
   - vision

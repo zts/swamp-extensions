@@ -14,6 +14,8 @@ installed.
 
 ## Requirements
 
+- macOS on Apple silicon, or Linux (x86_64 or aarch64). torch has no wheels for
+  Intel Macs, and the helper's lock file needs POSIX `flock`, so not Windows.
 - uv on `PATH`, or at `uvPath`.
 - Disk: the model is about 9.5GB in the Hugging Face cache, and the Python
   environment (torch, transformers) about 800MB.
