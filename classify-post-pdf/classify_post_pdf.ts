@@ -52,6 +52,9 @@ const ListPdfsArgsSchema = z.object({
   directory: z.string().min(1).describe(
     "Directory of PDFs; absolute, or relative to the repository",
   ),
+  run: z.string().regex(NAME).optional().describe(
+    "Name the list pdf-list-<run>, so concurrent workflow runs keep their own lists",
+  ),
 });
 
 const ScanArgsSchema = z.object({
@@ -308,11 +311,20 @@ export const behavior = {
         const directory = resolve(context.repoDir, a.directory);
         const files: { path: string; name: string }[] = [];
         for await (const entry of Deno.readDir(directory)) {
-          if (entry.isFile && /\.pdf$/i.test(entry.name)) {
-            const path = `${directory}/${entry.name}`;
-            const hash = await contentHash(await Deno.readFile(path));
-            files.push({ path, name: instanceName(path, hash) });
-          }
+          if (!/\.pdf$/i.test(entry.name)) continue;
+          const path = `${directory}/${entry.name}`;
+          if (entry.isSymlink) {
+            const target = await Deno.stat(path).catch(() => null);
+            if (!target) {
+              context.logger.warning("Skipping {path}: its link is broken", {
+                path,
+              });
+              continue;
+            }
+            if (!target.isFile) continue;
+          } else if (!entry.isFile) continue;
+          const hash = await contentHash(await Deno.readFile(path));
+          files.push({ path, name: instanceName(path, hash) });
         }
         files.sort((x, y) => x.path.localeCompare(y.path));
         // Two files share a record only when they hold the same bytes under
@@ -330,7 +342,8 @@ export const behavior = {
           byName.set(f.name, f.path);
           return true;
         });
-        const handle = await context.writeResource("pdfList", "pdf-list", {
+        const listName = a.run ? `pdf-list-${a.run}` : "pdf-list";
+        const handle = await context.writeResource("pdfList", listName, {
           directory,
           files: unique,
           listedAt: new Date().toISOString(),
@@ -397,20 +410,21 @@ export const behavior = {
             generateMs: Number(ocr.generateMs ?? 0),
             scannedAt: new Date().toISOString(),
           });
-          const headerHandle = await context
-            .createFileWriter("header", `header-${name}`)
-            .writeAll(top.png);
+          // details first: if its write fails, no header is left without it.
           const detailsHandle = await context.writeResource(
             "details",
             `details-${name}`,
             details,
           );
+          const headerHandle = await context
+            .createFileWriter("header", `header-${name}`)
+            .writeAll(top.png);
+          // The letter's contents stay out of the logs.
           context.logger.info(
-            "Wrote {name}: {documentType} from {sender}, parsed JSON: {parsedOk}",
+            "Wrote {name}: {documentType}, parsed JSON: {parsedOk}",
             {
               name: detailsHandle.name,
               documentType: details.documentType,
-              sender: details.sender,
               parsedOk: details.parsedOk,
             },
           );

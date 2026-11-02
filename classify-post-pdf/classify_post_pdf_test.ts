@@ -61,6 +61,8 @@ interface Fakes {
   runModel?: (call: RunModelCall) => unknown;
   /** Records queryData finds; given the predicate. */
   queryData?: (predicate: string) => unknown[];
+  /** A resource spec whose write fails. */
+  failWrite?: string;
 }
 
 interface Seen {
@@ -100,7 +102,11 @@ function contextFor(
   fakes: Fakes,
   globalArgs: Record<string, unknown> = {},
 ) {
-  const test = createModelTestContext({ globalArgs, methodName: method, repoDir });
+  const test = createModelTestContext({
+    globalArgs,
+    methodName: method,
+    repoDir,
+  });
   const seen: Seen = {
     runModel: [],
     queryData: [],
@@ -109,6 +115,16 @@ function contextFor(
   };
   const context = {
     ...test.context,
+    writeResource: (
+      specName: string,
+      name: string,
+      data: Record<string, unknown>,
+    ) => {
+      if (specName === fakes.failWrite) {
+        return Promise.reject(new Error(`write of ${name} failed`));
+      }
+      return test.context.writeResource(specName, name, data);
+    },
     runModel: async (call: RunModelCall) => {
       seen.runModel.push(call);
       const image = String(call.arguments?.imagePath ?? "");
@@ -133,7 +149,12 @@ async function run(
   fakes: Fakes = {},
   globalArgs: Record<string, unknown> = {},
 ) {
-  const { test, context, seen } = contextFor(repoDir, method, fakes, globalArgs);
+  const { test, context, seen } = contextFor(
+    repoDir,
+    method,
+    fakes,
+    globalArgs,
+  );
   // deno-lint-ignore no-explicit-any
   await (behavior.methods[method].execute as any)(args, context);
   return {
@@ -241,7 +262,14 @@ Deno.test("scan passes page, fraction, dpi, prompt and the ocr behavior through"
     const { resources, files, seen } = await run(
       repoDir,
       "scan",
-      { ...SCAN, page: 2, fraction: 0.5, dpi: 100, prompt: "Who sent this?", maxNewTokens: 64 },
+      {
+        ...SCAN,
+        page: 2,
+        fraction: 0.5,
+        dpi: 100,
+        prompt: "Who sent this?",
+        maxNewTokens: 64,
+      },
       {},
       { ocrBehavior: "my-ocr" },
     );
@@ -271,21 +299,38 @@ Deno.test("scanning the same file again writes a new version of the same records
 
     // Same contents under another file name is a different record name.
     const copy = await run(repoDir, "scan", { pdfPath: "post/copy.pdf" });
-    assertEquals(copy.resources[0].name, `details-copy-${SAMPLE_HASH.slice(0, 16)}`);
+    assertEquals(
+      copy.resources[0].name,
+      `details-copy-${SAMPLE_HASH.slice(0, 16)}`,
+    );
   });
 });
 
 Deno.test("scan fails, naming the ocr behavior and how to set it up, when qianfan-ocr fails", async () => {
   await withRepo(async (repoDir) => {
-    const { error, resources, files , seen } = await runFailing(repoDir, "scan", SCAN, {
-      runModel: () => ({
-        ok: false,
-        error: { message: 'Definition "qianfan-ocr" not found.' },
-      }),
-    });
-    assertStringIncludes(error.message, 'Definition "qianfan-ocr" not found. If');
-    assertStringIncludes(error.message, "swamp behavior create @zts/qianfan-ocr qianfan-ocr");
-    assertStringIncludes(error.message, "swamp behavior run qianfan-ocr install");
+    const { error, resources, files, seen } = await runFailing(
+      repoDir,
+      "scan",
+      SCAN,
+      {
+        runModel: () => ({
+          ok: false,
+          error: { message: 'Definition "qianfan-ocr" not found.' },
+        }),
+      },
+    );
+    assertStringIncludes(
+      error.message,
+      'Definition "qianfan-ocr" not found. If',
+    );
+    assertStringIncludes(
+      error.message,
+      "swamp behavior create @zts/qianfan-ocr qianfan-ocr",
+    );
+    assertStringIncludes(
+      error.message,
+      "swamp behavior run qianfan-ocr install",
+    );
     assertEquals(resources, []);
     assertEquals(files, []);
     // The temporary image is removed on failure too.
@@ -296,11 +341,35 @@ Deno.test("scan fails, naming the ocr behavior and how to set it up, when qianfa
   });
 });
 
+Deno.test("scan writes no header when the details write fails", async () => {
+  await withRepo(async (repoDir) => {
+    const { error, files } = await runFailing(repoDir, "scan", SCAN, {
+      failWrite: "details",
+    });
+    assertStringIncludes(error.message, `details-${NAME}`);
+    assertEquals(files, []);
+  });
+});
+
+Deno.test("scan keeps the letter's contents out of its logs", async () => {
+  await withRepo(async (repoDir) => {
+    const { logs } = await run(repoDir, "scan", SCAN);
+    for (const value of ["Fenwick", "Ada Example", "Heron Lane", "7731"]) {
+      assertEquals(logs.includes(value), false, value);
+    }
+  });
+});
+
 Deno.test("scan fails without writing when qianfan-ocr returns no ocr record", async () => {
   await withRepo(async (repoDir) => {
-    const { error, resources, files } = await runFailing(repoDir, "scan", SCAN, {
-      runModel: () => ({ ok: true, resources: [] }),
-    });
+    const { error, resources, files } = await runFailing(
+      repoDir,
+      "scan",
+      SCAN,
+      {
+        runModel: () => ({ ok: true, resources: [] }),
+      },
+    );
     assertStringIncludes(error.message, "wrote no ocr record");
     assertEquals([resources, files], [[], []]);
   });
@@ -308,9 +377,14 @@ Deno.test("scan fails without writing when qianfan-ocr returns no ocr record", a
 
 Deno.test("scan fails without writing when the ocr record at that version is gone", async () => {
   await withRepo(async (repoDir) => {
-    const { error, resources, files } = await runFailing(repoDir, "scan", SCAN, {
-      queryData: () => [],
-    });
+    const { error, resources, files } = await runFailing(
+      repoDir,
+      "scan",
+      SCAN,
+      {
+        queryData: () => [],
+      },
+    );
     assertStringIncludes(error.message, `ocr-${NAME}`);
     assertStringIncludes(error.message, "version 3");
     assertEquals([resources, files], [[], []]);
@@ -331,7 +405,14 @@ Deno.test("scan keeps the raw answer and empty fields when the model gave no JSO
     assertEquals(d.parsedOk, false);
     assertEquals(d.rawOutput, "I cannot read this.");
     assertEquals(
-      [d.sender, d.date, d.recipient, d.recipientAddress, d.documentType, d.documentTypeRaw],
+      [
+        d.sender,
+        d.date,
+        d.recipient,
+        d.recipientAddress,
+        d.documentType,
+        d.documentTypeRaw,
+      ],
       [null, null, null, null, null, null],
     );
     assertEquals(d.referenceNumbers, {});
@@ -341,12 +422,16 @@ Deno.test("scan keeps the raw answer and empty fields when the model gave no JSO
 
 Deno.test("scan fails on a missing PDF and on a file that is not a PDF, before calling qianfan-ocr", async () => {
   await withRepo(async (repoDir) => {
-    const missing = await runFailing(repoDir, "scan", { pdfPath: "post/nope.pdf" });
+    const missing = await runFailing(repoDir, "scan", {
+      pdfPath: "post/nope.pdf",
+    });
     assertStringIncludes(missing.error.message, "PDF not found");
     assertEquals(missing.seen.runModel, []);
 
     await Deno.writeTextFile(`${repoDir}/post/fake.pdf`, "hello");
-    const fake = await runFailing(repoDir, "scan", { pdfPath: "post/fake.pdf" });
+    const fake = await runFailing(repoDir, "scan", {
+      pdfPath: "post/fake.pdf",
+    });
     assertStringIncludes(fake.error.message, "not a readable PDF");
     assertEquals(fake.seen.runModel, []);
   });
@@ -377,6 +462,52 @@ Deno.test("listPdfs lists the PDFs in a directory, sorted, with their record nam
   });
 });
 
+Deno.test("listPdfs names its list after the run it is given", async () => {
+  await withRepo(async (repoDir) => {
+    const run1 = "6b0f3c52-8f1e-4c47-9a3d-2e5b7c1d9f40";
+    const { resources } = await run(repoDir, "listPdfs", {
+      directory: "post",
+      run: run1,
+    });
+    assertEquals(resources[0].name, `pdf-list-${run1}`);
+    assertEquals(
+      behavior.methods.listPdfs.arguments.safeParse({
+        directory: "post",
+        run: "../x",
+      }).success,
+      false,
+    );
+  });
+});
+
+Deno.test("listPdfs follows symlinks to PDFs and warns about broken ones", async () => {
+  await withRepo(async (repoDir) => {
+    await Deno.mkdir(`${repoDir}/elsewhere`);
+    await Deno.writeFile(
+      `${repoDir}/elsewhere/other.pdf`,
+      SAMPLE.slice(0, 100),
+    );
+    await Deno.symlink(
+      `${repoDir}/elsewhere/other.pdf`,
+      `${repoDir}/post/linked.pdf`,
+    );
+    await Deno.symlink(`${repoDir}/elsewhere`, `${repoDir}/post/dir.pdf`);
+    await Deno.symlink(
+      `${repoDir}/elsewhere/gone.pdf`,
+      `${repoDir}/post/broken.pdf`,
+    );
+    const { resources, logs } = await run(repoDir, "listPdfs", {
+      directory: "post",
+    });
+    const files = resources[0].data.files as { path: string; name: string }[];
+    assertEquals(files.map((f) => f.path), [
+      `${repoDir}/post/linked.pdf`,
+      `${repoDir}/post/Water Bill (Oct).pdf`,
+    ]);
+    assertStringIncludes(logs, "broken.pdf");
+  });
+});
+
 Deno.test("listPdfs keeps one of two files that would share a record, and says which it skipped", async () => {
   await withRepo(async (repoDir) => {
     await Deno.writeFile(`${repoDir}/post/Water-Bill-Oct.pdf`, SAMPLE);
@@ -395,8 +526,19 @@ Deno.test("listPdfs keeps one of two files that would share a record, and says w
 
 Deno.test("instanceName is the safe file stem and the first 16 hex of the content hash", () => {
   const hash = "0123456789abcdef".repeat(4);
-  assertEquals(instanceName("/p/Water Bill (Oct).pdf", hash), "Water-Bill-Oct-0123456789abcdef");
-  for (const path of ["/p/Rechnung März.pdf", "/p/ .pdf", "/p/.pdf", "/p/日本.PDF", "/p/a b.pdf"]) {
+  assertEquals(
+    instanceName("/p/Water Bill (Oct).pdf", hash),
+    "Water-Bill-Oct-0123456789abcdef",
+  );
+  for (
+    const path of [
+      "/p/Rechnung März.pdf",
+      "/p/ .pdf",
+      "/p/.pdf",
+      "/p/日本.PDF",
+      "/p/a b.pdf",
+    ]
+  ) {
     assertMatch(instanceName(path, hash), /^[A-Za-z0-9_-]+$/);
   }
   assertEquals(instanceName("/p/ .pdf", hash), "letter-0123456789abcdef");
@@ -439,7 +581,19 @@ Deno.test("normaliseDocumentType maps other words to other and keeps them", () =
 });
 
 Deno.test("normaliseDocumentType maps a missing or empty type to null, not other", () => {
-  for (const raw of [null, undefined, "", "  ", "unknown", "Unknown", "none", "null", "N/A"]) {
+  for (
+    const raw of [
+      null,
+      undefined,
+      "",
+      "  ",
+      "unknown",
+      "Unknown",
+      "none",
+      "null",
+      "N/A",
+    ]
+  ) {
     assertEquals(normaliseDocumentType(raw).documentType, null, String(raw));
   }
   assertEquals(normaliseDocumentType("unknown").documentTypeRaw, "unknown");

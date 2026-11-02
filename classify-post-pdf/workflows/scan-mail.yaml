@@ -23,7 +23,8 @@ inputs:
       default: qianfan-ocr
 jobs:
   # Listing is its own job so the scan job reads this run's list: a forEach
-  # reads its list when its job starts.
+  # reads its list when its job starts. The list is named after the run, so
+  # concurrent runs each scan their own directory.
   - name: list
     description: Find the PDFs to scan
     steps:
@@ -37,6 +38,7 @@ jobs:
             ocrBehavior: ${{ inputs.ocrBehavior }}
           inputs:
             directory: ${{ inputs.directory }}
+            run: ${{ run.id }}
         dependsOn: []
         weight: 0
         allowFailure: false
@@ -49,7 +51,7 @@ jobs:
         description: Read one letter
         forEach:
           item: pdf
-          in: ${{ data.latest('classify-post-pdf', 'pdf-list').attributes.files }}
+          in: ${{ data.latest('classify-post-pdf', 'pdf-list-' + run.id).attributes.files }}
         # Each scan loads the multi-GB model, and qianfan-ocr runs one model
         # at a time on the machine anyway.
         concurrency: 1
