@@ -1,6 +1,7 @@
 import {
   assertEquals,
   assertExists,
+  assertMatch,
   assertRejects,
   assertStringIncludes,
 } from "jsr:@std/assert@1.0.19";
@@ -294,4 +295,384 @@ Deno.test("install and extract each log when they finish", async () => {
       );
     },
   );
+});
+
+const START = {
+  type: "start",
+  model: DEFAULT_MODEL,
+  revision: DEFAULT_REVISION,
+  device: "mps",
+  dtype: "bfloat16",
+  lockWaitMs: 3,
+  loadMs: 14000,
+};
+
+function item(id: string, text: string) {
+  return {
+    type: "item",
+    id,
+    rawOutput: `{"text": "${text}"}`,
+    parsed: { text: text },
+    generateMs: 9000,
+  };
+}
+
+const jsonLines = (...lines: unknown[]) =>
+  lines.map((l) => JSON.stringify(l)).join("\n");
+
+async function batchFixture(f: Fixture) {
+  for (const name of ["a", "b", "c"]) {
+    await Deno.writeFile(`${f.repoDir}/scans/${name}.png`, new Uint8Array([1]));
+  }
+}
+
+const ITEMS = [
+  { imagePath: "scans/a.png", prompt: "Read a" },
+  { imagePath: "scans/b.png", prompt: "Read b" },
+  { imagePath: "scans/c.png", prompt: "Read c", name: "letter-c" },
+];
+
+/** Run a method whether it throws or not: its writes, logs and error. */
+async function run(
+  f: Fixture,
+  method: MethodName,
+  args: Record<string, unknown>,
+) {
+  const test = createModelTestContext({
+    globalArgs: { uvPath: f.fake.uvPath },
+    methodName: method,
+    repoDir: f.repoDir,
+  });
+  const context = {
+    ...test.context,
+    extensionFile: (path: string) => `/ext/qianfan-ocr/${path}`,
+  };
+  let error: Error | null = null;
+  try {
+    // deno-lint-ignore no-explicit-any
+    await (behavior.methods[method].execute as any)(args, context);
+  } catch (e) {
+    error = e as Error;
+  }
+  return { written: test.getWrittenResources(), logs: test.getLogs(), error };
+}
+
+function batchRecord(
+  written: { specName: string; name: string; data: unknown }[],
+) {
+  const batches = written.filter((w) => w.specName === "batch");
+  assertEquals(batches.length, 1);
+  // deno-lint-ignore no-explicit-any
+  return batches[0] as { name: string; data: any };
+}
+
+Deno.test("extractBatch writes an ocr record per item and a batch record, with one helper run", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(
+        START,
+        item("0", "a"),
+        item("1", "b"),
+        item("2", "c"),
+        { type: "end", count: 3 },
+      ),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { written, error } = await run(f, "extractBatch", {
+        items: ITEMS,
+        maxNewTokens: 64,
+        name: "post",
+      });
+      assertEquals(error, null);
+      const ocr = written.filter((w) => w.specName === "ocr");
+      assertEquals(ocr.map((w) => w.name), [
+        "ocr-a",
+        "ocr-b",
+        "ocr-letter-c",
+      ]);
+      assertEquals(ocr[1].data.parsed, { text: "b" });
+      assertEquals(ocr[1].data.prompt, "Read b");
+      assertEquals(ocr[1].data.image, `${f.repoDir}/scans/b.png`);
+      assertEquals(ocr[1].data.loadMs, 14000);
+
+      const batch = batchRecord(written);
+      assertEquals(batch.name, "batch-post");
+      assertEquals(batch.data.succeeded, 3);
+      assertEquals(
+        batch.data.items.map((i: { record: string }) => i.record),
+        ["ocr-a", "ocr-b", "ocr-letter-c"],
+      );
+
+      const calls = await fakeUvCalls(f.fake);
+      assertEquals(calls.length, 1);
+      assertEquals(calls[0].requests, [
+        {
+          id: "0",
+          image: `${f.repoDir}/scans/a.png`,
+          prompt: "Read a",
+          maxNewTokens: 64,
+        },
+        {
+          id: "1",
+          image: `${f.repoDir}/scans/b.png`,
+          prompt: "Read b",
+          maxNewTokens: 64,
+        },
+        {
+          id: "2",
+          image: `${f.repoDir}/scans/c.png`,
+          prompt: "Read c",
+          maxNewTokens: 64,
+        },
+      ]);
+    },
+  );
+});
+
+Deno.test("extractBatch passes model and revision to the helper", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(
+        { ...START, model: "me/ocr", revision: "f00" },
+        item("0", "a"),
+        { type: "end", count: 1 },
+      ),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { written } = await run(f, "extractBatch", {
+        items: [ITEMS[0]],
+        model: "me/ocr",
+        revision: "f00",
+      });
+      const [call] = await fakeUvCalls(f.fake);
+      assertEquals(call.argv.includes("--offline"), true);
+      assertEquals(call.argv.at(-4), "extract-batch");
+      assertEquals(call.argv.slice(-2), ["--model=me/ocr", "--revision=f00"]);
+      assertEquals(batchRecord(written).data.revision, "f00");
+    },
+  );
+});
+
+Deno.test("extractBatch records a missing image as that item's error and reads the rest", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(
+        START,
+        item("0", "a"),
+        item("2", "c"),
+        { type: "end", count: 2 },
+      ),
+    },
+    async (f) => {
+      await batchFixture(f);
+      await Deno.remove(`${f.repoDir}/scans/b.png`);
+      const { written, error } = await run(f, "extractBatch", {
+        items: ITEMS,
+      });
+      assertEquals(error, null);
+      const [call] = await fakeUvCalls(f.fake);
+      assertEquals(
+        (call.requests as { id: string }[]).map((r) => r.id),
+        ["0", "2"],
+      );
+      const batch = batchRecord(written).data;
+      assertEquals(batch.items[1].status, "error");
+      assertStringIncludes(batch.items[1].error, "image not found");
+      assertEquals(batch.items[1].record, null);
+      assertEquals(
+        written.filter((w) => w.specName === "ocr").map((w) => w.name),
+        ["ocr-a", "ocr-letter-c"],
+      );
+    },
+  );
+});
+
+Deno.test("extractBatch names an ocr record on the batch only for items that succeeded", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(
+        START,
+        item("0", "a"),
+        { type: "item", id: "1", error: "RuntimeError: MPS out of memory" },
+        item("2", "c"),
+        { type: "end", count: 3 },
+      ),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { written, error } = await run(f, "extractBatch", {
+        items: ITEMS,
+      });
+      assertEquals(error, null);
+      const batch = batchRecord(written).data;
+      assertEquals(batch.items.map((i: { status: string }) => i.status), [
+        "ok",
+        "error",
+        "ok",
+      ]);
+      assertEquals(batch.items[1].record, null);
+      assertEquals(batch.items[1].error, "RuntimeError: MPS out of memory");
+      assertEquals(
+        written.some((w) => w.name === "ocr-b"),
+        false,
+      );
+      assertEquals([batch.succeeded, batch.failed, batch.notRun], [2, 1, 0]);
+    },
+  );
+});
+
+Deno.test("extractBatch keeps the finished items when the helper dies part way, then fails", async () => {
+  await withFixture(
+    {
+      FAKE_UV_RUN: "lines-then-crash",
+      FAKE_UV_STDOUT: jsonLines(START, item("0", "a"), item("1", "b")),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { written, error } = await run(f, "extractBatch", {
+        items: ITEMS,
+      });
+      assertExists(error);
+      assertStringIncludes(error.message, "exit 137");
+      assertEquals(
+        written.filter((w) => w.specName === "ocr").map((w) => w.name),
+        ["ocr-a", "ocr-b"],
+      );
+      const batch = batchRecord(written).data;
+      assertEquals(batch.items[2].status, "notRun");
+      assertStringIncludes(batch.error, "exit 137");
+    },
+  );
+});
+
+Deno.test("extractBatch fails when the helper exits 0 but leaves an item out", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(
+        START,
+        item("0", "a"),
+        item("2", "c"),
+        { type: "end", count: 3 },
+      ),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { written, error } = await run(f, "extractBatch", {
+        items: ITEMS,
+      });
+      assertExists(error);
+      assertStringIncludes(error.message, "left out 1 item");
+      const batch = batchRecord(written).data;
+      assertEquals(batch.items[1].status, "notRun");
+      assertEquals(batch.items[0].record, "ocr-a");
+    },
+  );
+});
+
+Deno.test("extractBatch fails when the helper exits 0 without its end line", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(START, item("0", "a")),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { written, error } = await run(f, "extractBatch", {
+        items: [ITEMS[0]],
+      });
+      assertExists(error);
+      assertStringIncludes(error.message, "end");
+      assertEquals(batchRecord(written).data.succeeded, 1);
+    },
+  );
+});
+
+Deno.test("extractBatch with two items taking one record name fails before running the helper", async () => {
+  await withFixture({}, async (f) => {
+    await batchFixture(f);
+    const { written, error } = await run(f, "extractBatch", {
+      items: [ITEMS[0], { imagePath: "scans/b.png", prompt: "p", name: "a" }],
+    });
+    assertExists(error);
+    assertStringIncludes(error.message, "ocr-a");
+    assertEquals(written, []);
+    assertEquals((await fakeUvCalls(f.fake)).length, 0);
+  });
+});
+
+Deno.test("extractBatch writes nothing when the helper fails before any item", async () => {
+  await withFixture({ FAKE_UV_RUN: "helper-error" }, async (f) => {
+    await batchFixture(f);
+    const { written, error } = await run(f, "extractBatch", {
+      items: ITEMS,
+    });
+    assertExists(error);
+    assertStringIncludes(error.message, "run install");
+    assertEquals(written, []);
+  });
+});
+
+Deno.test("extractBatch removes its requests file afterwards", async () => {
+  await withFixture({ FAKE_UV_RUN: "helper-error" }, async (f) => {
+    await batchFixture(f);
+    await run(f, "extractBatch", { items: ITEMS });
+    const [call] = await fakeUvCalls(f.fake);
+    const requests = call.argv.find((a) => a.startsWith("--requests="))!
+      .slice("--requests=".length);
+    await assertRejects(() => Deno.stat(requests), Deno.errors.NotFound);
+  });
+});
+
+Deno.test("extractBatch names its batch record after the time by default", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(START, item("0", "a"), {
+        type: "end",
+        count: 1,
+      }),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { written } = await run(f, "extractBatch", { items: [ITEMS[0]] });
+      assertMatch(
+        batchRecord(written).name,
+        /^batch-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/,
+      );
+    },
+  );
+});
+
+Deno.test("extractBatch warns when no item succeeded", async () => {
+  await withFixture(
+    {
+      FAKE_UV_STDOUT: jsonLines(
+        START,
+        { type: "item", id: "0", error: "RuntimeError: boom" },
+        { type: "end", count: 1 },
+      ),
+    },
+    async (f) => {
+      await batchFixture(f);
+      const { logs, error } = await run(f, "extractBatch", {
+        items: [ITEMS[0]],
+      });
+      assertEquals(error, null);
+      const warning = logs.find((l) => l.level === "warning");
+      assertExists(warning);
+      assertStringIncludes(warning.message, "No item");
+    },
+  );
+});
+
+Deno.test("extractBatch with every image missing writes only the batch record", async () => {
+  await withFixture({}, async (f) => {
+    const { written, error, logs } = await run(f, "extractBatch", {
+      items: [{ imagePath: "scans/nope.png", prompt: "p" }],
+    });
+    assertEquals(error, null);
+    assertEquals(written.map((w) => w.specName), ["batch"]);
+    assertEquals((await fakeUvCalls(f.fake)).length, 0);
+    assertExists(logs.find((l) => l.level === "warning"));
+  });
 });

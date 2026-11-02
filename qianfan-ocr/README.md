@@ -67,6 +67,56 @@ writes one resource, `install`.
 On this author's Mac (MPS), loading the model took 14s and reading the sample
 image took 19s, about 50s for the whole run.
 
+### Many images: `extractBatch`
+
+Loading the model takes most of an `extract`. `extractBatch` loads it once and
+reads every image in the list with it, then exits, so a batch of letters pays
+for one load instead of one per letter.
+
+```sh
+swamp behavior run ocr extractBatch --input 'items:json=[
+  {"imagePath": "scans/page-1.png", "prompt": "Transcribe all the text."},
+  {"imagePath": "scans/page-2.png", "prompt": "Transcribe all the text.", "name": "p2"}
+]' --input name=scans
+```
+
+Each image gets the same `ocr` resource `extract` would write (`ocr-page-1`,
+`ocr-p2`), with the batch's `loadMs` and `lockWaitMs` on each. The batch also
+writes a `batch` resource, `batch-` and `name` (default: the time it started,
+such as `batch-2026-11-02T21-53-21-794Z`), kept for 7 days:
+
+| Field                             | What                                                   |
+| --------------------------------- | ------------------------------------------------------ |
+| `items[].status`                  | `ok`, `error` or `notRun`, in the order given          |
+| `items[].record`, `recordVersion` | the `ocr` resource this batch wrote; null unless `ok`  |
+| `items[].error`                   | why the image could not be read                        |
+| `succeeded`, `failed`, `notRun`   | counts                                                 |
+| `error`                           | why the helper stopped part way, if it did             |
+| `loadMs`, `lockWaitMs`, `totalMs` | one model load, the wait for the lock, the whole batch |
+
+**Read results through the batch record.** An image that fails leaves any
+earlier `ocr-<name>` record in place, so the latest `ocr-<name>` may be from an
+older run. `items[].record` and `recordVersion` name the record this batch
+wrote; anything else is not this batch's result.
+
+- **One bad image does not stop the batch.** A missing image or a failed
+  generation is that item's `error`, and the rest are read. A batch where no
+  image was read still succeeds, with a warning in the log.
+- **A batch that dies part way keeps what it finished.** The helper reports each
+  image as it is read, so if it is killed (for example for lack of memory), the
+  images already read keep their `ocr` records, the rest are `notRun`, the batch
+  record is written, and the method fails. If the helper fails before reading
+  any image (the model is not installed), nothing is written, as with `extract`.
+- **Cancelling a batch writes nothing.** Cancelling the swamp run stops the
+  helper and releases the model lock, but the method stops with it, so no
+  records are written for that run, not even for images already read.
+- **Progress arrives at the end.** The helper logs "item i of n" as it goes, but
+  swamp shows the helper's output only once the batch has finished.
+- **A batch holds the model for its whole run.** Other runs of `extract` or
+  `extractBatch` on this machine wait until it ends, however long it is.
+- Two images must not share a record name: give one a `name`, or the batch fails
+  before it starts.
+
 ### Global arguments
 
 | Argument | Default                  | What                                               |
@@ -86,11 +136,11 @@ newer one, and run `install` with it first.
   environment's lock, it fails and says to run `install`. A failure after the
   helper started (for example the OS stopping it for lack of memory) is reported
   as the helper's error instead.
-- **Each `extract` loads the model again**, which takes most of a run's time.
-  Runs take turns: swamp's lock serialises runs on one instance, and the helper
-  holds a lock file (`~/.cache/qianfan-ocr/model.lock`) across the whole
-  machine, so runs from other instances or repos queue rather than load several
-  copies at once.
+- **Each `extract` loads the model again**, which takes most of a run's time;
+  use `extractBatch` for many images. Runs take turns: swamp's lock serialises
+  runs on one instance, and the helper holds a lock file
+  (`~/.cache/qianfan-ocr/model.lock`) across the whole machine, so runs from
+  other instances or repos queue rather than load several copies at once.
 - **Aborting a run stops the model.** Cancelling the swamp run stops uv and the
   Python process with it, and the model lock is released.
 - **The model's tokenizer is Qwen2's.** The helper loads it with

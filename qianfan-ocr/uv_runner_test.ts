@@ -5,11 +5,7 @@ import {
   assertStringIncludes,
 } from "jsr:@std/assert@1.0.19";
 import { fakeUvCalls, makeFakeUv } from "./testdata/fake_uv_shim.ts";
-import {
-  environmentExists,
-  runHelper,
-  runHelperLines,
-} from "./uv_runner.ts";
+import { environmentExists, runHelper, runHelperLines } from "./uv_runner.ts";
 
 const SCRIPT = "/ext/helper/qianfan_ocr.py";
 

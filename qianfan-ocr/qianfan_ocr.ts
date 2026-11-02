@@ -1,13 +1,19 @@
 /**
- * Runs the Qianfan-OCR vision-language model locally on one image, through
- * a Python helper that uv runs, so torch and transformers stay out of Deno.
+ * Runs the Qianfan-OCR vision-language model locally on images, through a
+ * Python helper that uv runs, so torch and transformers stay out of Deno.
  * install builds the helper's environment and downloads the model; extract
- * never downloads either.
+ * reads one image and extractBatch many with one model load, and neither
+ * ever downloads.
  *
  * @module
  */
 import { z } from "npm:zod@4.6.7";
-import { environmentExists, runHelper, type UvSettings } from "./uv_runner.ts";
+import {
+  environmentExists,
+  runHelper,
+  runHelperLines,
+  type UvSettings,
+} from "./uv_runner.ts";
 
 /** The Hugging Face model the behavior runs by default. */
 export const DEFAULT_MODEL = "baidu/Qianfan-OCR";
@@ -40,6 +46,8 @@ const ModelArgs = {
 
 const InstallArgsSchema = z.object(ModelArgs);
 
+const NAME = /^[A-Za-z0-9_-]+$/;
+
 const ExtractArgsSchema = z.object({
   imagePath: z.string().min(1).describe(
     "Image to read; absolute, or relative to the repository",
@@ -51,8 +59,27 @@ const ExtractArgsSchema = z.object({
     "Most tokens the model may generate",
   ),
   ...ModelArgs,
-  name: z.string().regex(/^[A-Za-z0-9_-]+$/).optional().describe(
+  name: z.string().regex(NAME).optional().describe(
     "Name of the ocr resource, after ocr-; default the image file's stem",
+  ),
+});
+
+const ExtractBatchArgsSchema = z.object({
+  items: z.array(z.object({
+    imagePath: z.string().min(1).describe(
+      "Image to read; absolute, or relative to the repository",
+    ),
+    prompt: z.string().min(1).describe("What to ask the model of this image"),
+    name: z.string().regex(NAME).optional().describe(
+      "Name of its ocr resource, after ocr-; default the image file's stem",
+    ),
+  })).min(1).describe("The images to read, in order"),
+  maxNewTokens: z.number().int().min(1).default(1024).describe(
+    "Most tokens the model may generate, for each image",
+  ),
+  ...ModelArgs,
+  name: z.string().regex(NAME).optional().describe(
+    "Name of the batch resource, after batch-; default the time the batch started",
   ),
 });
 
@@ -74,6 +101,34 @@ const OcrSchema = z.object({
   extractedAt: z.string(),
 });
 
+const BatchSchema = z.object({
+  model: z.string(),
+  revision: z.string(),
+  device: z.string().nullable(),
+  dtype: z.string().nullable(),
+  lockWaitMs: z.number().nullable(),
+  loadMs: z.number().nullable(),
+  totalMs: z.number(),
+  items: z.array(z.object({
+    image: z.string(),
+    prompt: z.string(),
+    status: z.enum(["ok", "error", "notRun"]),
+    record: z.string().nullable().describe(
+      "The ocr resource this batch wrote for the image; null unless ok",
+    ),
+    recordVersion: z.number().nullable(),
+    error: z.string().nullable(),
+    generateMs: z.number().nullable(),
+  })),
+  succeeded: z.number(),
+  failed: z.number(),
+  notRun: z.number(),
+  error: z.string().nullable().describe(
+    "Why the helper failed part way, if it did",
+  ),
+  startedAt: z.string(),
+});
+
 const InstallSchema = z.object({
   model: z.string(),
   revision: z.string(),
@@ -89,6 +144,7 @@ type GlobalArgs = z.infer<typeof GlobalArgsSchema>;
 
 interface Logger {
   info(message: string, props?: Record<string, unknown>): void;
+  warning(message: string, props?: Record<string, unknown>): void;
 }
 
 interface Context {
@@ -101,7 +157,7 @@ interface Context {
     specName: string,
     name: string,
     data: Record<string, unknown>,
-  ) => Promise<{ name: string }>;
+  ) => Promise<{ name: string; version?: number }>;
 }
 
 function uvSettings(context: Context): UvSettings {
@@ -128,6 +184,15 @@ export function instanceName(imagePath: string, name?: string): string {
   }`;
 }
 
+function resolveImage(repoDir: string, path: string): string {
+  return path.startsWith("/") ? path : `${repoDir}/${path}`;
+}
+
+/** The default batch name: the time, to the millisecond, in safe characters. */
+function batchName(at: Date): string {
+  return at.toISOString().replace(/[:.]/g, "-");
+}
+
 async function isFile(path: string): Promise<boolean> {
   try {
     return (await Deno.stat(path)).isFile;
@@ -139,13 +204,27 @@ async function isFile(path: string): Promise<boolean> {
 /** The @zts/qianfan-ocr behavior. */
 export const behavior = {
   type: "@zts/qianfan-ocr",
-  version: "2026.11.02.1",
+  version: "2026.11.02.2",
   globalArguments: GlobalArgsSchema,
+  upgrades: [
+    {
+      toVersion: "2026.11.02.2",
+      description: "Adds extractBatch; no global argument changes",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   resources: {
     "ocr": {
       description: "What the model read from one image, and how long it took",
       schema: OcrSchema,
       lifetime: "infinite",
+      garbageCollection: 10,
+    },
+    "batch": {
+      description:
+        "One extractBatch: each image's outcome and the ocr record it wrote",
+      schema: BatchSchema,
+      lifetime: "7d",
       garbageCollection: 10,
     },
     "install": {
@@ -208,9 +287,7 @@ export const behavior = {
         context: Context,
       ) => {
         const a = ExtractArgsSchema.parse(args);
-        const image = a.imagePath.startsWith("/")
-          ? a.imagePath
-          : `${context.repoDir}/${a.imagePath}`;
+        const image = resolveImage(context.repoDir, a.imagePath);
         if (!await isFile(image)) throw new Error(`image not found: ${image}`);
 
         context.logger.info("Reading {image} with {model}@{revision}", {
@@ -267,6 +344,196 @@ export const behavior = {
           },
         );
         return { dataHandles: [handle] };
+      },
+    },
+    extractBatch: {
+      description:
+        "Read many images with one load of the model; never downloads (run install first)",
+      arguments: ExtractBatchArgsSchema,
+      execute: async (
+        args: z.input<typeof ExtractBatchArgsSchema>,
+        context: Context,
+      ) => {
+        const a = ExtractBatchArgsSchema.parse(args);
+        const started = new Date();
+        const items = a.items.map((item) => {
+          const image = resolveImage(context.repoDir, item.imagePath);
+          return {
+            image,
+            prompt: item.prompt,
+            name: instanceName(image, item.name),
+          };
+        });
+        const names = new Map<string, string>();
+        for (const item of items) {
+          const other = names.get(item.name);
+          if (other) {
+            throw new Error(
+              `${other} and ${item.image} would both be recorded as ${item.name}; give one a name`,
+            );
+          }
+          names.set(item.name, item.image);
+        }
+
+        type Outcome = z.infer<typeof BatchSchema>["items"][number];
+        const outcomes: Outcome[] = items.map((item) => ({
+          image: item.image,
+          prompt: item.prompt,
+          status: "notRun",
+          record: null,
+          recordVersion: null,
+          error: null,
+          generateMs: null,
+        }));
+        const sent: number[] = [];
+        for (const [i, item] of items.entries()) {
+          if (await isFile(item.image)) sent.push(i);
+          else {
+            outcomes[i].status = "error";
+            outcomes[i].error = `image not found: ${item.image}`;
+          }
+        }
+
+        const handles: { name: string; version?: number }[] = [];
+        let start: Record<string, unknown> | undefined;
+        let failure: string | null = null;
+        if (sent.length > 0) {
+          context.logger.info(
+            "Reading {count} images with {model}@{revision}",
+            { count: sent.length, model: a.model, revision: a.revision },
+          );
+          const tmpDir = await Deno.makeTempDir({ prefix: "qianfan-ocr-" });
+          let run;
+          try {
+            const requests = `${tmpDir}/requests.json`;
+            await Deno.writeTextFile(
+              requests,
+              JSON.stringify(sent.map((i) => ({
+                id: String(i),
+                image: items[i].image,
+                prompt: items[i].prompt,
+                maxNewTokens: a.maxNewTokens,
+              }))),
+            );
+            run = await runHelperLines(
+              uvSettings(context),
+              context.extensionFile(HELPER),
+              [
+                "extract-batch",
+                `--requests=${requests}`,
+                `--model=${a.model}`,
+                `--revision=${a.revision}`,
+              ],
+              { offline: true, onStderr: logHelper(context) },
+            );
+          } finally {
+            await Deno.remove(tmpDir, { recursive: true });
+          }
+          const results = run.lines.filter((l) => l.type === "item");
+          // Before any item, a failure leaves nothing to keep, as in extract.
+          if (!run.ok && results.length === 0) throw new Error(run.error!);
+          failure = run.error;
+          start = run.lines.find((l) => l.type === "start");
+
+          const byId = new Map(results.map((l) => [String(l.id), l]));
+          for (const i of sent) {
+            const line = byId.get(String(i));
+            if (!line) continue;
+            if (typeof line.error === "string") {
+              outcomes[i].status = "error";
+              outcomes[i].error = line.error;
+              continue;
+            }
+            const parsed = line.parsed && typeof line.parsed === "object" &&
+                !Array.isArray(line.parsed)
+              ? line.parsed as Record<string, unknown>
+              : null;
+            const handle = await context.writeResource(
+              "ocr",
+              items[i].name,
+              OcrSchema.parse({
+                image: items[i].image,
+                prompt: items[i].prompt,
+                rawOutput: line.rawOutput,
+                parsed,
+                parsedOk: parsed !== null,
+                model: a.model,
+                revision: a.revision,
+                device: start?.device,
+                dtype: start?.dtype,
+                lockWaitMs: start?.lockWaitMs,
+                loadMs: start?.loadMs,
+                generateMs: line.generateMs,
+                extractedAt: new Date().toISOString(),
+              }),
+            );
+            handles.push(handle);
+            Object.assign(outcomes[i], {
+              status: "ok",
+              record: handle.name,
+              recordVersion: handle.version ?? null,
+              generateMs: line.generateMs,
+            });
+          }
+          if (run.ok) {
+            const missing = sent.filter((i) => outcomes[i].status === "notRun")
+              .length;
+            if (missing > 0) {
+              failure =
+                `qianfan_ocr.py extract-batch left out ${missing} item(s)`;
+            } else if (!run.lines.some((l) => l.type === "end")) {
+              failure =
+                "qianfan_ocr.py extract-batch stopped before its end line";
+            }
+          }
+        }
+
+        const count = (status: Outcome["status"]) =>
+          outcomes.filter((o) => o.status === status).length;
+        const batch = BatchSchema.parse({
+          model: a.model,
+          revision: a.revision,
+          device: start?.device ?? null,
+          dtype: start?.dtype ?? null,
+          lockWaitMs: start?.lockWaitMs ?? null,
+          loadMs: start?.loadMs ?? null,
+          totalMs: Date.now() - started.getTime(),
+          items: outcomes,
+          succeeded: count("ok"),
+          failed: count("error"),
+          notRun: count("notRun"),
+          error: failure,
+          startedAt: started.toISOString(),
+        });
+        const batchHandle = await context.writeResource(
+          "batch",
+          `batch-${a.name ?? batchName(started)}`,
+          batch,
+        );
+        handles.push(batchHandle);
+        context.logger.info(
+          "Wrote {name}: {succeeded} read, {failed} failed, {notRun} not run",
+          {
+            name: batchHandle.name,
+            succeeded: batch.succeeded,
+            failed: batch.failed,
+            notRun: batch.notRun,
+          },
+        );
+        if (batch.succeeded === 0) {
+          context.logger.warning(
+            "No item in {name} was read: {failed} failed, {notRun} not run",
+            {
+              name: batchHandle.name,
+              failed: batch.failed,
+              notRun: batch.notRun,
+            },
+          );
+        }
+        // The records above stay written: read the batch record to tell
+        // which ocr records this batch wrote.
+        if (failure) throw new Error(failure);
+        return { dataHandles: handles };
       },
     },
   },

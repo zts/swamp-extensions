@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@zts/qianfan-ocr"
-version: "2026.11.02.1"
+version: "2026.11.02.2"
 license: MIT
 repository: https://github.com/zts/swamp-extensions
 description: >-
@@ -8,7 +8,8 @@ description: >-
   read text or structured details from an image, with a prompt you give.
   install builds the Python environment with uv and downloads the model at a
   pinned revision ahead of time; extract reads one image and never downloads,
-  so a run never stalls on a multi-GB fetch. Runs on Apple silicon (MPS),
+  so a run never stalls on a multi-GB fetch; extractBatch reads many images
+  with one load of the model. Runs on Apple silicon (MPS),
   CUDA or CPU, and takes turns on the model across the machine. Needs uv.
 paths:
   base: manifest
