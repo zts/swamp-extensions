@@ -27,8 +27,10 @@ if (calls) {
   );
 }
 
-const out = (text: string) => Deno.stdout.writeSync(new TextEncoder().encode(text));
-const err = (text: string) => Deno.stderr.writeSync(new TextEncoder().encode(text));
+const out = (text: string) =>
+  Deno.stdout.writeSync(new TextEncoder().encode(text));
+const err = (text: string) =>
+  Deno.stderr.writeSync(new TextEncoder().encode(text));
 
 if (args[0] === "python" && args[1] === "find") {
   if ((env("FAKE_UV_ENV") ?? "present") === "present") {
@@ -58,7 +60,9 @@ switch (env("FAKE_UV_RUN") ?? "ok") {
     break;
   case "helper-error":
     err(`${STARTED}\n`);
-    out(`{"error": "model x@y is not in the Hugging Face cache; run install"}\n`);
+    out(
+      `{"error": "model x@y is not in the Hugging Face cache; run install"}\n`,
+    );
     Deno.exit(1);
     break;
   case "crash":

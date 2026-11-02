@@ -118,7 +118,9 @@ export async function runHelper(
   if (code === 0) {
     if (!result) {
       throw new Error(
-        `qianfan_ocr.py ${args[0]} printed something other than one JSON object: ` +
+        `qianfan_ocr.py ${
+          args[0]
+        } printed something other than one JSON object: ` +
           stdout.trim().slice(0, 200),
       );
     }

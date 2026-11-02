@@ -142,7 +142,8 @@ export const behavior = {
       garbageCollection: 10,
     },
     "install": {
-      description: "The last install: model revision and what was already there",
+      description:
+        "The last install: model revision and what was already there",
       schema: InstallSchema,
       lifetime: "infinite",
       garbageCollection: 5,

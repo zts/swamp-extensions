@@ -54,7 +54,9 @@ Deno.test("runHelper returns the helper's JSON and its stderr", async () => {
 
 Deno.test("runHelper runs the locked script, offline and with HF_HUB_OFFLINE when asked", async () => {
   await withFakeUv({}, async (fake) => {
-    await runHelper(settings(fake.uvPath), SCRIPT, ["extract"], { offline: true });
+    await runHelper(settings(fake.uvPath), SCRIPT, ["extract"], {
+      offline: true,
+    });
     const [call] = await fakeUvCalls(fake);
     assertEquals(call.argv, [
       "run",
@@ -71,7 +73,9 @@ Deno.test("runHelper runs the locked script, offline and with HF_HUB_OFFLINE whe
 
 Deno.test("runHelper may reach the network when not offline", async () => {
   await withFakeUv({}, async (fake) => {
-    await runHelper(settings(fake.uvPath), SCRIPT, ["install"], { offline: false });
+    await runHelper(settings(fake.uvPath), SCRIPT, ["install"], {
+      offline: false,
+    });
     const [call] = await fakeUvCalls(fake);
     assertEquals(call.argv.includes("--offline"), false);
     assertEquals(call.HF_HUB_OFFLINE, null);
@@ -83,7 +87,9 @@ Deno.test("runHelper passes hfHome as HF_HOME, and leaves it alone when unset", 
     await runHelper(settings(fake.uvPath, "/models/hf"), SCRIPT, ["install"], {
       offline: false,
     });
-    await runHelper(settings(fake.uvPath), SCRIPT, ["install"], { offline: false });
+    await runHelper(settings(fake.uvPath), SCRIPT, ["install"], {
+      offline: false,
+    });
     const [withHome, without] = await fakeUvCalls(fake);
     assertEquals(withHome.HF_HOME, "/models/hf");
     assertEquals(without.HF_HOME, Deno.env.get("HF_HOME") ?? null);
@@ -92,7 +98,9 @@ Deno.test("runHelper passes hfHome as HF_HOME, and leaves it alone when unset", 
 
 Deno.test("a missing uv is reported as uv: not found", async () => {
   const error = await assertRejects(() =>
-    runHelper(settings("/nonexistent/uv"), SCRIPT, ["install"], { offline: false })
+    runHelper(settings("/nonexistent/uv"), SCRIPT, ["install"], {
+      offline: false,
+    })
   );
   assertStringIncludes((error as Error).message, "uv: not found");
 });
