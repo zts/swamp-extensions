@@ -342,3 +342,35 @@ def test_extract_batch_arguments_default_to_the_pinned_revision():
     args = build_parser().parse_args(["extract-batch", "--requests=r.json"])
     assert args.model == "baidu/Qianfan-OCR"
     assert args.revision == qianfan_ocr.DEFAULT_REVISION
+
+
+def test_extract_batch_that_fails_to_load_prints_no_lines(tmp_path):
+    """A load failure after the lock (a real OOM) must leave stdout empty and
+    exit non-zero, so the caller treats it as failing before any item."""
+    (a,) = _images(tmp_path, "a.png")
+    requests = _requests(tmp_path, [{"id": "0", "image": a, "prompt": "p", "maxNewTokens": 1}])
+    stub = tmp_path / "stub_load.py"
+    stub.write_text(
+        textwrap.dedent(
+            f"""
+            import sys
+            sys.path.insert(0, {str(Path(qianfan_ocr.__file__).parent)!r})
+            import qianfan_ocr
+            qianfan_ocr.cached_snapshot = lambda m, r: "/hf"
+            def load(path):
+                raise MemoryError("out of memory loading the model")
+            qianfan_ocr.load_model = load
+            sys.exit(qianfan_ocr.main(sys.argv[1:]))
+            """
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, str(stub), "extract-batch", f"--requests={requests}"],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "XDG_CACHE_HOME": str(tmp_path / "cache")},
+        timeout=30,
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "out of memory loading the model" in result.stderr
