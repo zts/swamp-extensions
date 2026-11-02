@@ -152,7 +152,11 @@ def extract(image, prompt, model_id, revision, max_new_tokens):
         print(f"loading {model_id} on {device} ({dtype_name})", file=sys.stderr, flush=True)
         load_start = time.monotonic()
         model = AutoModelForImageTextToText.from_pretrained(path, dtype=dtype).to(device).eval()
-        processor = AutoProcessor.from_pretrained(path)
+        # The model's config.json has no transformers_version, so transformers
+        # cannot rule out a Mistral tokenizer from a local path and warns about
+        # Mistral's regex. The tokenizer is Qwen2's; fix_mistral_regex=True
+        # would swap in Mistral's pre-tokenizer regex, so say False.
+        processor = AutoProcessor.from_pretrained(path, fix_mistral_regex=False)
         load_ms = int((time.monotonic() - load_start) * 1000)
 
         messages = [

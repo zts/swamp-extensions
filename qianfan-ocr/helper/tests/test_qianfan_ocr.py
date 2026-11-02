@@ -139,3 +139,8 @@ def test_extract_of_an_uncached_model_says_run_install(tmp_path):
     error = json.loads(result.stdout)["error"]
     assert error.endswith("is not in the Hugging Face cache; run install")
     assert qianfan_ocr.DEFAULT_REVISION in error
+
+
+def test_a_prompt_starting_with_a_dash_is_read_in_equals_form():
+    args = build_parser().parse_args(["extract", "--image=a.png", "--prompt=-Transcribe"])
+    assert args.prompt == "-Transcribe"
