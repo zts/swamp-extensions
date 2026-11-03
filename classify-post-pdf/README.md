@@ -90,7 +90,8 @@ that cannot be read or rendered is never sent, and a letter the model fails on
 gets no records; both are recorded as failed in the `scan-batch` record (below)
 and the rest go on. Each letter's result is read through qianfan-ocr's batch
 record, at the version that batch wrote, never by its latest name. Two files
-that would share records are sent once, with a warning.
+that would share records are sent once; the one skipped is named only in the
+log's warning, not in `scan-batch`.
 
 `scanBatch` fails, after writing every record it can, when:
 
