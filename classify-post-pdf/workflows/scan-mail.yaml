@@ -2,8 +2,12 @@ id: 6b0f3c52-8f1e-4c47-9a3d-2e5b7c1d9f40
 name: "@zts/classify-post-pdf/scan-mail"
 description: >-
   Read the key details off every scanned letter (PDF) in a directory with
-  @zts/classify-post-pdf, one letter at a time. Needs an installed
-  @zts/qianfan-ocr behavior; see the extension's README.
+  @zts/classify-post-pdf, loading the OCR model once for the whole
+  directory. The run shows one scan step, not progress letter by letter;
+  the scan-batch record says how each letter went. A letter that cannot be
+  read does not fail the run, but a helper crash part way does, keeping
+  what was read. Needs an installed @zts/qianfan-ocr 2026.11.03.1 or later;
+  see the extension's README.
 tags: {}
 inputs:
   type: object
@@ -22,9 +26,10 @@ inputs:
       description: Name of the installed @zts/qianfan-ocr behavior
       default: qianfan-ocr
 jobs:
-  # Listing is its own job so the scan job reads this run's list: a forEach
-  # reads its list when its job starts. The list is named after the run, so
-  # concurrent runs each scan their own directory.
+  # The list is named after the run and scanBatch reads it by that name, so
+  # concurrent runs each scan their own directory. A run holds the
+  # classify-post-pdf behavior for its whole batch, so another run's
+  # listPdfs waits behind it and can time out (see the README).
   - name: list
     description: Find the PDFs to scan
     steps:
@@ -45,30 +50,26 @@ jobs:
     dependsOn: []
     weight: 0
   - name: scan
-    description: Read each letter in turn
+    description: Read every listed letter with one model load
     steps:
-      - name: scan-${{ self._index }}
-        description: Read one letter
-        forEach:
-          item: pdf
-          in: ${{ data.latest('classify-post-pdf', 'pdf-list-' + run.id).attributes.files }}
-        # Each scan loads the multi-GB model, and qianfan-ocr runs one model
-        # at a time on the machine anyway.
-        concurrency: 1
+      - name: scan-batch
+        description: Read the letters
         task:
           type: behavior
           behaviorType: "@zts/classify-post-pdf"
           behaviorName: classify-post-pdf
-          methodName: scan
+          methodName: scanBatch
           globalArgs:
             ocrBehavior: ${{ inputs.ocrBehavior }}
           inputs:
-            pdfPath: ${{ self.pdf.path }}
+            list: ${{ run.id }}
             fraction: ${{ inputs.fraction }}
         dependsOn: []
         weight: 0
-        # One unreadable letter should not stop the rest.
-        allowFailure: true
+        # An unreadable letter is recorded in scan-batch and does not fail
+        # the step; a helper crash does, and so does reading none of the
+        # letters. An empty directory succeeds.
+        allowFailure: false
     dependsOn:
       - job: list
         condition:
