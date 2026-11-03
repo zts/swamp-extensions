@@ -374,3 +374,31 @@ def test_extract_batch_that_fails_to_load_prints_no_lines(tmp_path):
     assert result.returncode != 0
     assert result.stdout == ""
     assert "out of memory loading the model" in result.stderr
+
+
+def test_extract_loads_once_and_returns_what_it_read(tmp_path, fake_model):
+    (a,) = _images(tmp_path, "letter.png")
+    result = qianfan_ocr.extract(a, "Read it", "baidu/Qianfan-OCR", "abc", 64)
+    assert fake_model.loads == ["/hf/baidu/Qianfan-OCR@abc"]
+    assert fake_model.generated == [(a, "Read it", 64)]
+    assert set(result) == {
+        "model",
+        "revision",
+        "device",
+        "dtype",
+        "prompt",
+        "rawOutput",
+        "parsed",
+        "lockWaitMs",
+        "loadMs",
+        "generateMs",
+    }
+    assert result["rawOutput"] == '{"text": "letter"}'
+    assert result["parsed"] == {"text": "letter"}
+    assert (result["device"], result["dtype"]) == ("cpu", "float32")
+    assert (result["model"], result["revision"], result["prompt"]) == (
+        "baidu/Qianfan-OCR",
+        "abc",
+        "Read it",
+    )
+    assert result["generateMs"] == 7

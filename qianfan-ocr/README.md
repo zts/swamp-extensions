@@ -105,8 +105,10 @@ wrote; anything else is not this batch's result.
 - **A batch that dies part way keeps what it finished.** The helper reports each
   image as it is read, so if it is killed (for example for lack of memory), the
   images already read keep their `ocr` records, the rest are `notRun`, the batch
-  record is written, and the method fails. If the helper fails before reading
-  any image (the model is not installed), nothing is written, as with `extract`.
+  record is written, and the method fails. If the helper fails before it has
+  finished any image (the model is not installed, or it is killed or cancelled
+  while reading the first one), nothing is written, not even the batch record or
+  the errors for missing images, as with `extract`.
 - **Cancelling a batch keeps what it finished, too.** Cancelling the swamp run
   stops the helper and releases the model lock; the images already read keep
   their `ocr` records, the rest are `notRun` on the batch record, and the run
