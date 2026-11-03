@@ -497,6 +497,8 @@ function fakeQianfan(options: {
   fail?: string;
   /** runModel succeeds but returns no batch handle. */
   noBatchHandle?: boolean;
+  /** Change the item outcomes the batch record holds, as a buggy one might. */
+  mangle?: (items: Record<string, unknown>[]) => Record<string, unknown>[];
   stored?: Stored[];
 } = {}) {
   const stored: Stored[] = [...(options.stored ?? [])];
@@ -550,7 +552,7 @@ function fakeQianfan(options: {
         lockWaitMs: 0,
         loadMs: 14000,
         totalMs: 60000,
-        items: outcomes,
+        items: options.mangle ? options.mangle(outcomes) : outcomes,
         succeeded: count("ok"),
         failed: count("error"),
         notRun: count("notRun"),
@@ -946,6 +948,56 @@ Deno.test("scanBatch says which qianfan-ocr version it needs when the installed 
   });
 });
 
+Deno.test("scanBatch gives the setup hint, not the upgrade one, for other extractBatch errors", async () => {
+  await withRepo(async (repoDir) => {
+    const q = fakeQianfan({
+      fail: "extractBatch failed: image not found: /tmp/x.png",
+    });
+    const { error } = await runFailing(
+      repoDir,
+      "scanBatch",
+      { pdfPaths: [SCAN.pdfPath] },
+      q,
+    );
+    assertEquals(error.message.includes("2026.11.03.1"), false);
+    assertStringIncludes(
+      error.message,
+      "swamp behavior create @zts/qianfan-ocr qianfan-ocr",
+    );
+  });
+});
+
+Deno.test("scanBatch fails, marking the letters it cannot match, when the batch record does not match what was sent", async () => {
+  for (
+    const mangle of [
+      // An item missing from the end.
+      (items: Record<string, unknown>[]) => items.slice(0, 1),
+      // An item naming another letter's record.
+      (items: Record<string, unknown>[]) =>
+        items.map((item, i) =>
+          i === 1 ? { ...item, record: items[0].record } : item
+        ),
+    ]
+  ) {
+    await withRepo(async (repoDir) => {
+      await setupTwo(repoDir);
+      const q = fakeQianfan({ mangle });
+      const { error, resources } = await runFailing(
+        repoDir,
+        "scanBatch",
+        TWO,
+        q,
+      );
+      assertStringIncludes(error.message, "does not match");
+      const record = scanBatchRecord(resources);
+      assertEquals(record.data.letters.map((l) => l.status), ["ok", "error"]);
+      assertStringIncludes(record.data.letters[1].error!, "does not match");
+      assertEquals(record.data.letters[1].details, null);
+      assertStringIncludes(record.data.error!, "does not match");
+    });
+  }
+});
+
 Deno.test("scanBatch fails when qianfan-ocr succeeds without returning its batch record", async () => {
   await withRepo(async (repoDir) => {
     const q = fakeQianfan({ noBatchHandle: true });
@@ -981,6 +1033,11 @@ Deno.test("scanBatch marks a letter failed when its details or header write fail
       const record = scanBatchRecord(resources);
       assertEquals(record.data.letters.map((l) => l.status), ["error", "ok"]);
       assertStringIncludes(record.data.letters[0].error!, "failed");
+      // A details record written before the header failed is still named.
+      assertEquals(
+        record.data.letters[0].details,
+        fail.failFile ? `details-${NAME}` : null,
+      );
       assertEquals(
         [record.data.succeeded, record.data.failed],
         [1, 1],

@@ -281,8 +281,11 @@ async function readPdf(path: string): Promise<Uint8Array<ArrayBuffer>> {
 function ocrFailure(ocrBehavior: string, error: { message: string }): string {
   const message = error.message.replace(/\.$/, "");
   // An older qianfan-ocr, from before extractBatch.
+  // swamp's runModel and workflow wordings for a method the type lacks.
   if (
-    /extractBatch/.test(message) && /unknown method|not found/i.test(message)
+    /unknown method 'extractBatch'|method 'extractBatch' not found/i.test(
+      message,
+    )
   ) {
     return `qianfan-ocr behavior '${ocrBehavior}' failed: ${message}. ` +
       `scanBatch needs @zts/qianfan-ocr 2026.11.03.1 or later: run ` +
@@ -358,6 +361,7 @@ async function writeLetter(
   context: Context,
   letter: Rendered,
   details: z.infer<typeof DetailsSchema>,
+  onDetails?: (handle: DataHandle) => void,
 ): Promise<{ detailsHandle: DataHandle; headerHandle: DataHandle }> {
   // details first: if its write fails, no header is left without it.
   const detailsHandle = await context.writeResource(
@@ -365,6 +369,7 @@ async function writeLetter(
     `details-${letter.name}`,
     details,
   );
+  onDetails?.(detailsHandle);
   const headerHandle = await context
     .createFileWriter("header", `header-${letter.name}`)
     .writeAll(await Deno.readFile(letter.imagePath));
@@ -701,9 +706,30 @@ export const behavior = {
               } else if (!result.ok) {
                 failure = ocrFailure(ocrBehavior, result.error);
               }
+              // Items are in the order sent; anything else is a qianfan bug,
+              // and guessing which letter an item belongs to would misfile it.
+              const mismatch =
+                `qianfan-ocr's batch ${record.name} does not match what was sent`;
+              if (read.items.length !== sent.length) {
+                failure ??=
+                  `${mismatch}: ${read.items.length} items for ${sent.length} letters`;
+              }
               for (const [i, letter] of sent.entries()) {
                 const item = read.items[i];
-                if (!item) continue;
+                if (!item) {
+                  letter.status = "error";
+                  letter.error = `${mismatch}: no item for this letter`;
+                  continue;
+                }
+                if (
+                  item.status === "ok" && item.record !== `ocr-${letter.name}`
+                ) {
+                  letter.status = "error";
+                  letter.error =
+                    `${mismatch}: its item names ${item.record}, not ocr-${letter.name}`;
+                  failure ??= `${mismatch}: ${letter.path} got ${item.record}`;
+                  continue;
+                }
                 if (item.status !== "ok") {
                   letter.status = item.status;
                   letter.error = item.error;
@@ -735,10 +761,14 @@ export const behavior = {
                     context,
                     letterRendered,
                     details,
+                    // Named even if the header write then fails.
+                    (handle) => {
+                      handles.push(handle);
+                      letter.details = handle.name;
+                    },
                   );
-                  handles.push(written.detailsHandle, written.headerHandle);
+                  handles.push(written.headerHandle);
                   letter.status = "ok";
-                  letter.details = written.detailsHandle.name;
                 } catch (error) {
                   letter.status = "error";
                   letter.error = errorMessage(error);
