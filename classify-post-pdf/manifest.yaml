@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@zts/classify-post-pdf"
-version: "2026.11.02.1"
+version: "2026.11.03.1"
 license: MIT
 repository: https://github.com/zts/swamp-extensions
 description: >-
@@ -8,14 +8,17 @@ description: >-
   and address, document type (bill, statement, invoice, reminder, notice or
   other), reference numbers and other facts. scan renders the top of a page
   in-process with PDFium (WebAssembly) and has an installed @zts/qianfan-ocr
-  behavior read it, all on this machine. listPdfs and the scan-mail workflow
-  read a whole directory of post.
+  behavior read it, all on this machine. scanBatch reads many letters with
+  one load of the model; listPdfs and the scan-mail workflow read a whole
+  directory of post with it.
 paths:
   base: manifest
 behaviors:
   - classify_post_pdf.ts
 workflows:
   - workflows/scan-mail.yaml
+# Bare name: a pinned version installs exactly that one, and an installed
+# older one is kept either way. scanBatch says which version it needs.
 dependencies:
   - "@zts/qianfan-ocr"
 additionalFiles:

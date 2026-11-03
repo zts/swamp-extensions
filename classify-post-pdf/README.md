@@ -7,7 +7,8 @@ query, sort or act on.
 
 `scan` renders the top of a page with [PDFium][pdfium] compiled to WebAssembly,
 inside swamp, then asks an installed [`@zts/qianfan-ocr`][qianfan] behavior to
-read it with a letter prompt. Nothing leaves the machine.
+read it with a letter prompt. `scanBatch` does the same for many letters with
+one load of the model. Nothing leaves the machine.
 
 [pdfium]: https://pdfium.googlesource.com/pdfium/
 [qianfan]: https://swamp-club.com/extensions/@zts/qianfan-ocr
@@ -37,7 +38,17 @@ If your qianfan-ocr behavior has another name, pass it as the global argument
 `ocrBehavior`. If it is missing or not installed, `scan` fails with the setup
 commands above in its error.
 
-This was tested with `@zts/qianfan-ocr` 2026.11.02.1.
+`scanBatch` and the `scan-mail` workflow need `@zts/qianfan-ocr` 2026.11.03.1 or
+later, which has `extractBatch`. With an older one they fail saying so. To
+update, pull it and run its install again, since the new helper may need its
+environment rebuilt:
+
+```sh
+swamp extension pull @zts/qianfan-ocr
+swamp behavior run qianfan-ocr install
+```
+
+This was tested with `@zts/qianfan-ocr` 2026.11.03.1.
 
 ## Usage
 
@@ -58,16 +69,53 @@ The top quarter of the first page usually holds the letterhead, date, address
 block and references. Reading less of the page is faster and keeps the body of
 the letter out of the model.
 
-To read a whole directory, one letter at a time:
+To read many letters with one load of the model:
+
+```sh
+swamp behavior run classify-post-pdf scanBatch \
+  --input 'pdfPaths=["scans/a.pdf","scans/b.pdf"]'
+```
+
+`scanBatch` takes `page`, `fraction`, `dpi`, `prompt` and `maxNewTokens` as
+`scan` does, applied to every letter, and exactly one of:
+
+| Input      | What                                                                                                           |
+| ---------- | -------------------------------------------------------------------------------------------------------------- |
+| `pdfPaths` | the PDFs; absolute, or repo-relative                                                                           |
+| `list`     | a list `listPdfs` wrote on this behavior: the `run` it was given, or the list's full name (`pdf-list` if none) |
+
+It renders every PDF, has qianfan-ocr read them all with one `extractBatch`
+call, then writes each letter's `details` and `header` as `scan` does. A PDF
+that cannot be read or rendered is never sent, and a letter the model fails on
+gets no records; both are recorded as failed in the `scan-batch` record (below)
+and the rest go on. Each letter's result is read through qianfan-ocr's batch
+record, at the version that batch wrote, never by its latest name. Two files
+that would share records are sent once, with a warning.
+
+`scanBatch` fails, after writing every record it can, when:
+
+- the batch failed before any letter (qianfan-ocr missing, not installed or too
+  old), with how to fix it in the error;
+- qianfan-ocr's helper failed part way, such as a crash: the letters it read
+  before then keep their records, and the rest are `notRun`;
+- letters were given but none was read.
+
+Given no PDFs, as for an empty directory, it writes an empty `scan-batch` record
+and succeeds.
+
+To read a whole directory:
 
 ```sh
 swamp workflow run @zts/classify-post-pdf/scan-mail --input directory=scans
 ```
 
-The workflow lists the PDFs with `listPdfs`, then scans each, using the
-`classify-post-pdf` behavior created above (or creating it if it is missing). A
-letter that fails does not stop the rest. Symlinks to PDFs are followed; a
-broken link is skipped with a warning. Each run keeps its list as
+The workflow lists the PDFs with `listPdfs`, then reads them all with one
+`scanBatch`, using the `classify-post-pdf` behavior created above (or creating
+it if it is missing). The model loads once for the whole directory. The run view
+shows one scan step rather than each letter's progress; the `scan-batch` record
+says how each one went. A letter that fails does not stop the rest, but a helper
+crash part way fails the run, keeping what was read. Symlinks to PDFs are
+followed; a broken link is skipped with a warning. Each run keeps its list as
 `pdf-list-<run id>`, so runs started together each scan their own directory.
 These lists expire after 7 days, and `swamp data gc` removes them.
 
@@ -94,6 +142,12 @@ Each scan writes two records named after the file and its contents, for example
 | `ocr`                                  | the qianfan-ocr record it came from                                                   |
 | `model`, `revision`, `device`, timings | how it was read                                                                       |
 
+Each `scanBatch` also writes `scan-batch-<run or time>-<random>`, kept 7 days
+(the last 10): every PDF's `path`, record `name`, `status` (`ok`, `error` or
+`notRun`), the `details` record written and the `error`; the qianfan-ocr `batch`
+record the letters were read from; `succeeded`, `failed` and `notRun` counts;
+`loadMs`; and the batch's `error`, if it failed part way.
+
 Scanning the same file again adds a version to its records (100 are kept). A
 different letter saved under a reused name, such as a scanner's `scan0001.pdf`,
 gets its own records, because its contents differ. Two files share records only
@@ -103,10 +157,21 @@ keep at most 64 characters of the file name.
 
 ## What to expect
 
-- **Each letter loads the model again.** On this author's Mac (MPS), reading the
-  sample letter took 14s to load the model and 14s to read it, 49s for the whole
-  `swamp behavior run`; the workflow read two letters in 52s. Scans take turns
-  on the model across the machine.
+- **`scan` loads the model for each letter; `scanBatch` loads it once.** On this
+  author's Mac (MPS), reading the sample letter took 14s to load the model and
+  14s to read it, 49s for the whole `swamp behavior run`. Scans take turns on
+  the model across the machine.
+- **A batch holds the behavior.** `scanBatch` holds the `classify-post-pdf`
+  behavior for the whole batch, minutes for a large inbox, where the old
+  workflow held it a letter at a time. Another `scan-mail` run's `listPdfs`, or
+  a `scan`, waits behind it and can time out (`SWAMP_LOCK_TIMEOUT_MS`, 60s by
+  default). Run large directories one at a time.
+- **A crash is not a cancel.** When qianfan-ocr's helper crashes part way, the
+  letters it read keep their `details` and `header`, and `scan-batch` records
+  the rest. When the run itself is cancelled or times out while the batch is
+  reading, `scanBatch` stops there: qianfan-ocr may keep the ocr records it
+  wrote, but no `details`, `header` or `scan-batch` is written, and running it
+  again reads those letters again.
 - **Local only.** `scan` calls qianfan-ocr through swamp's `runModel`, which
   remote workers do not offer.
 - **qianfan-ocr keeps its own record** of each read, under its own behavior. Its
