@@ -1,7 +1,11 @@
+import fcntl
 import json
+import os
+import signal
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -102,11 +106,12 @@ def test_model_lock_does_not_wait_when_free(tmp_path):
     assert waited["ms"] < 300
 
 
-def _run_helper(args, env_extra=None):
+def _run_helper(args, env_extra=None, stdin=None):
     script = Path(qianfan_ocr.__file__)
     env = {"PATH": "/usr/bin:/bin", **(env_extra or {})}
     return subprocess.run(
         [sys.executable, str(script), *args],
+        input=stdin,
         capture_output=True,
         text=True,
         env=env,
@@ -184,16 +189,15 @@ def _images(tmp_path, *names):
     return paths
 
 
-def _requests(tmp_path, items):
-    path = tmp_path / "requests.json"
-    path.write_text(json.dumps(items))
-    return str(path)
+def _requests(items):
+    """Requests as the one line the caller sends on stdin."""
+    return json.dumps(items) + "\n"
 
 
 def _batch(tmp_path, items, model="baidu/Qianfan-OCR", revision="abc"):
     lines = []
     qianfan_ocr.extract_batch(
-        qianfan_ocr.read_requests(_requests(tmp_path, items)),
+        qianfan_ocr.read_requests(_requests(items)),
         model,
         revision,
         lines.append,
@@ -246,9 +250,9 @@ def test_extract_batch_takes_the_model_lock_once(tmp_path, fake_model, monkeypat
     taken = []
     real = qianfan_ocr.model_lock
 
-    def counting(path):
+    def counting(path, *args):
         taken.append(path)
-        return real(path)
+        return real(path, *args)
 
     monkeypatch.setattr(qianfan_ocr, "model_lock", counting)
     a, b = _images(tmp_path, "a.png", "b.png")
@@ -285,9 +289,14 @@ def test_extract_batch_checks_the_cache_before_taking_the_lock(tmp_path, monkeyp
         ([{"id": "0", "image": "a"}], "prompt"),
     ],
 )
-def test_read_requests_rejects_a_bad_requests_file(tmp_path, items, message):
+def test_read_requests_rejects_bad_requests(items, message):
     with pytest.raises(qianfan_ocr.HelperError, match=message):
-        qianfan_ocr.read_requests(_requests(tmp_path, items))
+        qianfan_ocr.read_requests(_requests(items))
+
+
+def test_read_requests_rejects_a_line_that_is_not_json():
+    with pytest.raises(qianfan_ocr.HelperError, match="cannot read requests"):
+        qianfan_ocr.read_requests("not json\n")
 
 
 def test_extract_batch_lines_are_flushed_one_per_item(tmp_path):
@@ -295,7 +304,6 @@ def test_extract_batch_lines_are_flushed_one_per_item(tmp_path):
     pipe before the next item is generated, so a crash keeps what finished."""
     a, b = _images(tmp_path, "a.png", "b.png")
     requests = _requests(
-        tmp_path,
         [
             {"id": "0", "image": a, "prompt": "p", "maxNewTokens": 1},
             {"id": "1", "image": b, "prompt": "p", "maxNewTokens": 1},
@@ -320,7 +328,8 @@ def test_extract_batch_lines_are_flushed_one_per_item(tmp_path):
         )
     )
     result = subprocess.run(
-        [sys.executable, str(stub), "extract-batch", f"--requests={requests}"],
+        [sys.executable, str(stub), "extract-batch"],
+        input=requests,
         capture_output=True,
         text=True,
         env={"PATH": "/usr/bin:/bin", "XDG_CACHE_HOME": str(tmp_path / "cache")},
@@ -332,14 +341,14 @@ def test_extract_batch_lines_are_flushed_one_per_item(tmp_path):
     assert lines[1]["id"] == "0"
 
 
-def test_extract_batch_with_an_invalid_requests_file_reports_a_json_error(tmp_path):
-    result = _run_helper(["extract-batch", f"--requests={_requests(tmp_path, [])}"])
+def test_extract_batch_with_invalid_requests_reports_a_json_error():
+    result = _run_helper(["extract-batch"], stdin=_requests([]))
     assert result.returncode == 1
     assert "at least one" in json.loads(result.stdout)["error"]
 
 
 def test_extract_batch_arguments_default_to_the_pinned_revision():
-    args = build_parser().parse_args(["extract-batch", "--requests=r.json"])
+    args = build_parser().parse_args(["extract-batch"])
     assert args.model == "baidu/Qianfan-OCR"
     assert args.revision == qianfan_ocr.DEFAULT_REVISION
 
@@ -348,7 +357,7 @@ def test_extract_batch_that_fails_to_load_prints_no_lines(tmp_path):
     """A load failure after the lock (a real OOM) must leave stdout empty and
     exit non-zero, so the caller treats it as failing before any item."""
     (a,) = _images(tmp_path, "a.png")
-    requests = _requests(tmp_path, [{"id": "0", "image": a, "prompt": "p", "maxNewTokens": 1}])
+    requests = _requests([{"id": "0", "image": a, "prompt": "p", "maxNewTokens": 1}])
     stub = tmp_path / "stub_load.py"
     stub.write_text(
         textwrap.dedent(
@@ -365,7 +374,8 @@ def test_extract_batch_that_fails_to_load_prints_no_lines(tmp_path):
         )
     )
     result = subprocess.run(
-        [sys.executable, str(stub), "extract-batch", f"--requests={requests}"],
+        [sys.executable, str(stub), "extract-batch"],
+        input=requests,
         capture_output=True,
         text=True,
         env={"PATH": "/usr/bin:/bin", "XDG_CACHE_HOME": str(tmp_path / "cache")},
@@ -402,3 +412,261 @@ def test_extract_loads_once_and_returns_what_it_read(tmp_path, fake_model):
         "Read it",
     )
     assert result["generateMs"] == 7
+
+
+def _holder(lock):
+    return json.loads((Path(lock).parent / "holder.json").read_text())
+
+
+def _hold_lock(lock, seconds, holder=None):
+    """A process that holds the lock for seconds, recording holder in holder.json."""
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                f"""
+                import fcntl, json, os, time
+                f = open({str(lock)!r}, "a")
+                fcntl.flock(f, fcntl.LOCK_EX)
+                holder = {holder!r}
+                if holder is not None:
+                    holder = {{**holder, "pid": os.getpid()}}
+                    with open({str(Path(lock).parent / "holder.json")!r}, "w") as h:
+                        json.dump(holder, h)
+                print("held", flush=True)
+                time.sleep({seconds})
+                """
+            ),
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout.readline().strip() == "held"
+    return process
+
+
+def test_model_lock_records_its_holder_and_removes_it_on_release(tmp_path):
+    lock = tmp_path / "model.lock"
+    with model_lock(lock, owner={"command": "extract-batch", "batchId": "batch-1"}):
+        holder = _holder(lock)
+    assert holder["pid"] == os.getpid()
+    assert holder["parentPid"] == os.getppid()
+    assert holder["command"] == "extract-batch"
+    assert holder["batchId"] == "batch-1"
+    assert holder["startedAt"].endswith("Z")
+    assert not (tmp_path / "holder.json").exists()
+    assert [p.name for p in tmp_path.iterdir()] == ["model.lock"]
+
+
+def test_model_lock_leaves_a_holder_record_another_process_wrote(tmp_path):
+    lock = tmp_path / "model.lock"
+    with model_lock(lock):
+        (tmp_path / "holder.json").write_text(json.dumps({"pid": 1}))
+    assert _holder(lock) == {"pid": 1}
+
+
+def test_a_waiter_says_who_holds_the_lock(tmp_path, capsys):
+    lock = tmp_path / "model.lock"
+    holder = _hold_lock(lock, 0.6, {"command": "extract-batch", "batchId": "batch-7"})
+    try:
+        with model_lock(lock, is_helper=lambda pid: pid == holder.pid):
+            pass
+    finally:
+        holder.wait(timeout=5)
+    waiting = capsys.readouterr().err
+    assert f"held by pid {holder.pid}" in waiting
+    assert "batch-7" in waiting
+
+
+def test_a_waiter_does_not_name_a_holder_that_is_not_a_live_helper(tmp_path, capsys):
+    lock = tmp_path / "model.lock"
+    holder = _hold_lock(lock, 0.6, {"command": "extract-batch", "batchId": "batch-7"})
+    try:
+        with model_lock(lock, is_helper=lambda pid: False):
+            pass
+    finally:
+        holder.wait(timeout=5)
+    waiting = capsys.readouterr().err
+    assert "held by an unknown process" in waiting
+    assert "batch-7" not in waiting
+
+
+def test_model_lock_gives_up_after_its_timeout_naming_the_holder(tmp_path):
+    lock = tmp_path / "model.lock"
+    holder = _hold_lock(lock, 5, {"command": "extract", "batchId": "ocr-a"})
+    try:
+        start = time.monotonic()
+        with pytest.raises(qianfan_ocr.HelperError, match=f"held by pid {holder.pid}"):
+            with model_lock(lock, timeout=0.5, is_helper=lambda pid: True):
+                pass
+        assert time.monotonic() - start < 3
+    finally:
+        holder.kill()
+        holder.wait(timeout=5)
+
+
+def test_lock_timeout_and_batch_id_are_read_from_the_command_line():
+    args = build_parser().parse_args(
+        ["--watch-stdin", "extract-batch", "--batch-id=batch-1", "--lock-timeout=30"]
+    )
+    assert args.watch_stdin is True
+    assert (args.batch_id, args.lock_timeout) == ("batch-1", 30.0)
+    args = build_parser().parse_args(["extract", "--image=a", "--prompt=p"])
+    assert (args.watch_stdin, args.batch_id, args.lock_timeout) == (False, None, None)
+
+
+def _stub_helper(tmp_path):
+    """The real script with a stub model, at a path named qianfan_ocr.py; each
+    image takes STUB_GENERATE_S seconds."""
+    stub = tmp_path / "stub" / "qianfan_ocr.py"
+    stub.parent.mkdir()
+    stub.write_text(
+        textwrap.dedent(
+            f"""
+            import importlib.util, os, sys, time
+            spec = importlib.util.spec_from_file_location("real", {str(qianfan_ocr.__file__)!r})
+            helper = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(helper)
+            helper.cached_snapshot = lambda m, r: "/hf"
+            helper.load_model = lambda path: {{"device": "cpu", "dtype": "float32"}}
+            def generate(loaded, image, prompt, max_new_tokens):
+                time.sleep(float(os.environ.get("STUB_GENERATE_S", "0")))
+                return "{{}}", 1
+            helper.generate_one = generate
+            sys.exit(helper.main(sys.argv[1:]))
+            """
+        )
+    )
+    return stub
+
+
+def _lock_is_free(lock):
+    with open(lock, "a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        return True
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # A zombie still answers kill 0; ps shows it as Z.
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return bool(state.stdout.strip()) and not state.stdout.strip().startswith("Z")
+
+
+def _wait_for(condition, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.1)
+    return condition()
+
+
+def test_the_helper_exits_when_its_parent_is_killed_mid_batch(tmp_path):
+    """A parent holds the helper's stdin, stdout and stderr, as swamp does;
+    SIGKILL it part way through a batch and the helper must exit and free the
+    lock at once, though its stderr is now a broken pipe too. Each image takes
+    30s, so finishing the current one before exiting fails the test."""
+    stub = _stub_helper(tmp_path)
+    cache = tmp_path / "cache"
+    lock = cache / "qianfan-ocr" / "model.lock"
+    images = _images(tmp_path, *[f"{n}.png" for n in range(20)])
+    requests = _requests(
+        [{"id": str(n), "image": image, "prompt": "p", "maxNewTokens": 1} for n, image in enumerate(images)]
+    )
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                f"""
+                import subprocess, sys, time
+                helper = subprocess.Popen(
+                    [sys.executable, {str(stub)!r}, "--watch-stdin", "extract-batch", "--batch-id=b1"],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                helper.stdin.write({requests.encode()!r})
+                helper.stdin.flush()
+                print(helper.pid, flush=True)
+                time.sleep(600)
+                """
+            ),
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "XDG_CACHE_HOME": str(cache), "STUB_GENERATE_S": "30"},
+    )
+    helper_pid = int(parent.stdout.readline())
+    try:
+        assert _wait_for(lambda: (lock.parent / "holder.json").exists(), 10)
+        assert _holder(lock)["batchId"] == "b1"
+        parent.kill()
+        parent.wait(timeout=5)
+        assert _wait_for(lambda: not _alive(helper_pid), 5), "helper outlived its parent"
+        assert _lock_is_free(lock)
+    finally:
+        if _alive(helper_pid):
+            os.kill(helper_pid, signal.SIGKILL)
+
+    # The next batch after the killed one takes the lock and finishes. It runs
+    # without --watch-stdin: subprocess.run closes stdin once it is written.
+    result = subprocess.run(
+        [sys.executable, str(stub), "extract-batch", "--lock-timeout=10"],
+        input=_requests([{"id": "0", "image": images[0], "prompt": "p", "maxNewTokens": 1}]),
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "XDG_CACHE_HOME": str(cache)},
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.splitlines()[-1]) == {"type": "end", "count": 1}
+
+
+def test_without_watch_stdin_a_closed_stdin_does_not_stop_the_helper(tmp_path):
+    stub = _stub_helper(tmp_path)
+    (a,) = _images(tmp_path, "a.png")
+    result = subprocess.run(
+        [sys.executable, str(stub), "extract", f"--image={a}", "--prompt=p"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "XDG_CACHE_HOME": str(tmp_path / "cache"), "STUB_GENERATE_S": "0.5"},
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["rawOutput"] == "{}"
+
+
+def test_without_ps_a_holder_is_not_taken_for_a_helper(monkeypatch):
+    """Slim Linux images have no ps: a waiter must then say the holder is
+    unknown and go on waiting, not crash."""
+    monkeypatch.setenv("PATH", "/nonexistent")
+    assert qianfan_ocr.is_helper_process(os.getpid()) is False
+
+
+def _sleeping_script(tmp_path, name):
+    script = tmp_path / name
+    script.write_text("import time\ntime.sleep(60)\n")
+    return subprocess.Popen([sys.executable, str(script)])
+
+
+@pytest.mark.parametrize(
+    "name, helper",
+    [("qianfan_ocr.py", True), ("test_qianfan_ocr.py", False), ("qianfan_ocr.py.bak", False)],
+)
+def test_only_a_process_running_qianfan_ocr_py_is_a_helper(tmp_path, name, helper):
+    process = _sleeping_script(tmp_path, name)
+    try:
+        assert _wait_for(lambda: qianfan_ocr.is_helper_process(process.pid) is helper, 5)
+        assert qianfan_ocr.is_helper_process(process.pid) is helper
+    finally:
+        process.kill()
+        process.wait(timeout=5)

@@ -5,11 +5,16 @@
 // Controls, read from the environment the test's shim sets:
 //   FAKE_UV_CALLS   file to append each invocation to, as a JSON line of
 //                   {argv, HF_HOME, HF_HUB_OFFLINE, requests}, where requests
-//                   is the parsed --requests file, read while it still exists
+//                   is the first line of stdin, parsed, for extract-batch
 //   FAKE_UV_ENV     "present" (default) | "absent": what python find prints
 //   FAKE_UV_RUN     "ok" (default) | "uv-fail" | "helper-error" | "crash" |
-//                   "garbage" | "hang" | "lines-then-crash" | "torn": how
-//                   run behaves
+//                   "garbage" | "hang" | "lines-then-crash" | "torn" |
+//                   "hold" | "orphan": how run behaves. "hold" waits for
+//                   stdin to close; "orphan" exits at once, leaving a child
+//                   that holds stdout open until stdin closes, as a Python
+//                   that outlived uv would. Both write FAKE_UV_PIDFILE (the
+//                   waiting process's pid) and, once stdin closed,
+//                   FAKE_UV_PIDFILE.eof
 //   FAKE_UV_STDOUT  what run prints on "ok", "lines-then-crash" and "torn"
 //                   (one JSON object, or JSON lines); "lines-then-crash"
 //                   then dies, and "torn" then dies mid-line
@@ -18,7 +23,15 @@ const STARTED = "qianfan-ocr helper started";
 const args = Deno.args;
 const env = (name: string) => Deno.env.get(name);
 
-const requestsArg = args.find((a) => a.startsWith("--requests="));
+/** The first line of stdin, without reading past it. */
+async function readLine(): Promise<string> {
+  const bytes: number[] = [];
+  const one = new Uint8Array(1);
+  while (await Deno.stdin.read(one) === 1 && one[0] !== 10) bytes.push(one[0]);
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+const requestsLine = args.includes("extract-batch") ? await readLine() : null;
 const calls = env("FAKE_UV_CALLS");
 if (calls) {
   await Deno.writeTextFile(
@@ -27,11 +40,7 @@ if (calls) {
       argv: args,
       HF_HOME: env("HF_HOME") ?? null,
       HF_HUB_OFFLINE: env("HF_HUB_OFFLINE") ?? null,
-      requests: requestsArg
-        ? JSON.parse(
-          await Deno.readTextFile(requestsArg.slice("--requests=".length)),
-        )
-        : null,
+      requests: requestsLine ? JSON.parse(requestsLine) : null,
     }) + "\n",
     { append: true },
   );
@@ -99,4 +108,36 @@ switch (env("FAKE_UV_RUN") ?? "ok") {
     err(`${STARTED}\n`);
     await new Promise((resolve) => setTimeout(resolve, 60_000));
     Deno.exit(0);
+    break;
+  case "hold": {
+    err(`${STARTED}\n`);
+    const pidFile = env("FAKE_UV_PIDFILE")!;
+    await Deno.writeTextFile(pidFile, String(Deno.pid));
+    // Give up after a while, so a broken test leaves nothing running.
+    setTimeout(() => Deno.exit(3), 30_000);
+    const buffer = new Uint8Array(4096);
+    while (await Deno.stdin.read(buffer) !== null) { /* until EOF */ }
+    await Deno.writeTextFile(`${pidFile}.eof`, "eof");
+    Deno.exit(1);
+    break;
+  }
+  case "orphan": {
+    err(`${STARTED}\n`);
+    const pidFile = env("FAKE_UV_PIDFILE")!;
+    // sh inherits stdin, stdout and stderr, and outlives this process.
+    const child = new Deno.Command("sh", {
+      args: [
+        "-c",
+        `echo $$ > '${pidFile}'; cat > /dev/null; echo eof > '${pidFile}.eof'`,
+      ],
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    }).spawn();
+    child.unref();
+    while (!await Deno.stat(pidFile).then(() => true, () => false)) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    Deno.exit(1);
+  }
 }

@@ -3,11 +3,12 @@
  * Python helper that uv runs, so torch and transformers stay out of Deno.
  * install builds the helper's environment and downloads the model; extract
  * reads one image and extractBatch many with one model load, and neither
- * ever downloads.
+ * ever downloads; stop stops a helper that outlived the run that started it.
  *
  * @module
  */
 import { z } from "npm:zod@4.6.7";
+import { holderPath, HolderSchema, stopHolder } from "./lock_holder.ts";
 import {
   environmentExists,
   runHelper,
@@ -48,6 +49,10 @@ const InstallArgsSchema = z.object(ModelArgs);
 
 const NAME = /^[A-Za-z0-9_-]+$/;
 
+const lockTimeoutSeconds = z.number().positive().optional().describe(
+  "Give up after waiting this many seconds for another run's turn on the model; default wait as long as it takes",
+);
+
 const ExtractArgsSchema = z.object({
   imagePath: z.string().min(1).describe(
     "Image to read; absolute, or relative to the repository",
@@ -62,6 +67,7 @@ const ExtractArgsSchema = z.object({
   name: z.string().regex(NAME).optional().describe(
     "Name of the ocr resource, after ocr-; default the image file's stem",
   ),
+  lockTimeoutSeconds,
 });
 
 const ExtractBatchArgsSchema = z.object({
@@ -81,7 +87,10 @@ const ExtractBatchArgsSchema = z.object({
   name: z.string().regex(NAME).optional().describe(
     "Name of the batch resource, after batch-; default the time the batch started",
   ),
+  lockTimeoutSeconds,
 });
+
+const StopArgsSchema = z.object({});
 
 const OcrSchema = z.object({
   image: z.string(),
@@ -127,6 +136,18 @@ const BatchSchema = z.object({
     "Why the helper failed part way, if it did",
   ),
   startedAt: z.string(),
+});
+
+const StopSchema = z.object({
+  found: z.enum(["running", "stale", "none"]).describe(
+    "running: a live helper held the model lock; stale: holder.json named a process that is gone or not a helper; none: no holder.json",
+  ),
+  holder: HolderSchema.nullable().describe(
+    "What the helper recorded about itself; null when holder.json was missing or unreadable",
+  ),
+  stopped: z.boolean(),
+  signal: z.enum(["SIGTERM", "SIGKILL"]).nullable(),
+  stoppedAt: z.string(),
 });
 
 const InstallSchema = z.object({
@@ -192,6 +213,11 @@ function batchName(at: Date): string {
   return at.toISOString().replace(/[:.]/g, "-");
 }
 
+/** The helper's --lock-timeout, when one was given. */
+function lockTimeoutArgs(seconds?: number): string[] {
+  return seconds === undefined ? [] : [`--lock-timeout=${seconds}`];
+}
+
 async function isFile(path: string): Promise<boolean> {
   try {
     return (await Deno.stat(path)).isFile;
@@ -203,12 +229,18 @@ async function isFile(path: string): Promise<boolean> {
 /** The @zts/qianfan-ocr behavior. */
 export const behavior = {
   type: "@zts/qianfan-ocr",
-  version: "2026.11.03.1",
+  version: "2026.11.06.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
       toVersion: "2026.11.03.1",
       description: "Adds extractBatch; no global argument changes",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.06.1",
+      description:
+        "Adds stop and lockTimeoutSeconds; no global argument changes",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -223,6 +255,13 @@ export const behavior = {
       description:
         "One extractBatch: each image's outcome and the ocr record it wrote",
       schema: BatchSchema,
+      lifetime: "7d",
+      garbageCollection: 10,
+    },
+    "stop": {
+      description:
+        "The last stop: which helper held the model lock, and whether it was stopped",
+      schema: StopSchema,
       lifetime: "7d",
       garbageCollection: 10,
     },
@@ -294,6 +333,7 @@ export const behavior = {
           model: a.model,
           revision: a.revision,
         });
+        const name = instanceName(image, a.name);
         // Values go as --flag=value, so one starting with "-" stays a value.
         const result = await runHelper(
           uvSettings(context),
@@ -305,6 +345,8 @@ export const behavior = {
             `--model=${a.model}`,
             `--revision=${a.revision}`,
             `--max-new-tokens=${a.maxNewTokens}`,
+            `--batch-id=${name}`,
+            ...lockTimeoutArgs(a.lockTimeoutSeconds),
           ],
           { offline: true, onStderr: logHelper(context) },
         );
@@ -314,7 +356,7 @@ export const behavior = {
           : null;
         const handle = await context.writeResource(
           "ocr",
-          instanceName(image, a.name),
+          name,
           OcrSchema.parse({
             image,
             prompt: a.prompt,
@@ -355,6 +397,7 @@ export const behavior = {
       ) => {
         const a = ExtractBatchArgsSchema.parse(args);
         const started = new Date();
+        const batch = `batch-${a.name ?? batchName(started)}`;
         const items = a.items.map((item) => {
           const image = resolveImage(context.repoDir, item.imagePath);
           return {
@@ -401,39 +444,30 @@ export const behavior = {
             "Reading {count} images with {model}@{revision}",
             { count: sent.length, model: a.model, revision: a.revision },
           );
-          const tmpDir = await Deno.makeTempDir({ prefix: "qianfan-ocr-" });
-          let run;
-          try {
-            const requests = `${tmpDir}/requests.json`;
-            await Deno.writeTextFile(
-              requests,
-              JSON.stringify(sent.map((i) => ({
-                id: String(i),
-                image: items[i].image,
-                prompt: items[i].prompt,
-                maxNewTokens: a.maxNewTokens,
-              }))),
-            );
-            run = await runHelperLines(
-              uvSettings(context),
-              context.extensionFile(HELPER),
-              [
-                "extract-batch",
-                `--requests=${requests}`,
-                `--model=${a.model}`,
-                `--revision=${a.revision}`,
-              ],
-              { offline: true, onStderr: logHelper(context) },
-            );
-          } finally {
-            // A temp dir left behind must not hide what the helper read.
-            await Deno.remove(tmpDir, { recursive: true }).catch((error) =>
-              context.logger.warning(
-                "Could not remove the batch's temp dir {tmpDir}: {error}",
-                { tmpDir, error: String(error) },
-              )
-            );
-          }
+          // The requests go on stdin, one line, so nothing is left on disk
+          // when swamp dies part way.
+          const requests = JSON.stringify(sent.map((i) => ({
+            id: String(i),
+            image: items[i].image,
+            prompt: items[i].prompt,
+            maxNewTokens: a.maxNewTokens,
+          })));
+          const run = await runHelperLines(
+            uvSettings(context),
+            context.extensionFile(HELPER),
+            [
+              "extract-batch",
+              `--model=${a.model}`,
+              `--revision=${a.revision}`,
+              `--batch-id=${batch}`,
+              ...lockTimeoutArgs(a.lockTimeoutSeconds),
+            ],
+            {
+              offline: true,
+              onStderr: logHelper(context),
+              stdin: `${requests}\n`,
+            },
+          );
           const results = run.lines.filter((l) => l.type === "item");
           // Before any item, a failure leaves nothing to keep, as in extract.
           if (!run.ok && results.length === 0) throw new Error(run.error!);
@@ -505,7 +539,7 @@ export const behavior = {
 
         const count = (status: Outcome["status"]) =>
           outcomes.filter((o) => o.status === status).length;
-        const batch = BatchSchema.parse({
+        const batchRecord = BatchSchema.parse({
           model: a.model,
           revision: a.revision,
           device: start?.device ?? null,
@@ -522,26 +556,26 @@ export const behavior = {
         });
         const batchHandle = await context.writeResource(
           "batch",
-          `batch-${a.name ?? batchName(started)}`,
           batch,
+          batchRecord,
         );
         handles.push(batchHandle);
         context.logger.info(
           "Wrote {name}: {succeeded} read, {failed} failed, {notRun} not run",
           {
             name: batchHandle.name,
-            succeeded: batch.succeeded,
-            failed: batch.failed,
-            notRun: batch.notRun,
+            succeeded: batchRecord.succeeded,
+            failed: batchRecord.failed,
+            notRun: batchRecord.notRun,
           },
         );
-        if (batch.succeeded === 0) {
+        if (batchRecord.succeeded === 0) {
           context.logger.warning(
             "No item in {name} was read: {failed} failed, {notRun} not run",
             {
               name: batchHandle.name,
-              failed: batch.failed,
-              notRun: batch.notRun,
+              failed: batchRecord.failed,
+              notRun: batchRecord.notRun,
             },
           );
         }
@@ -549,6 +583,58 @@ export const behavior = {
         // which ocr records this batch wrote.
         if (failure) throw new Error(failure);
         return { dataHandles: handles };
+      },
+    },
+    stop: {
+      description:
+        "Stop the helper holding the model lock, e.g. one left running after swamp died",
+      arguments: StopArgsSchema,
+      execute: async (
+        _args: z.input<typeof StopArgsSchema>,
+        context: Context,
+      ) => {
+        const path = holderPath();
+        context.logger.info(
+          "Looking for the helper holding the model lock in {path}",
+          { path },
+        );
+        const result = await stopHolder(path);
+        const holder = result.holder;
+        if (result.found === "none") {
+          context.logger.info("No qianfan-ocr helper holds the model lock");
+        } else if (!holder) {
+          context.logger.info(
+            "holder.json could not be read, so no helper can be named; nothing to stop",
+          );
+        } else if (result.found === "stale") {
+          context.logger.info(
+            "holder.json names pid {pid} ({batchId}), which is no longer a qianfan-ocr helper; nothing to stop",
+            { pid: holder.pid, batchId: holder.batchId ?? null },
+          );
+        } else if (result.stopped) {
+          context.logger.info(
+            "Stopped pid {pid} ({command} {batchId}, since {startedAt}) with {signal}; the model lock is free",
+            { ...holder, signal: result.signal },
+          );
+        } else {
+          context.logger.warning(
+            "pid {pid} ({command} {batchId}) is still running after {signal}",
+            { ...holder, signal: result.signal },
+          );
+        }
+        const handle = await context.writeResource(
+          "stop",
+          "stop",
+          StopSchema.parse({ ...result, stoppedAt: new Date().toISOString() }),
+        );
+        if (result.found === "running" && !result.stopped) {
+          throw new Error(
+            `qianfan-ocr helper pid ${
+              holder!.pid
+            } is still running after ${result.signal}`,
+          );
+        }
+        return { dataHandles: [handle] };
       },
     },
   },

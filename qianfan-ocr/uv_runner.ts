@@ -22,9 +22,12 @@ export interface RunOptions {
   offline: boolean;
   /** Given each line the helper writes to stderr, as it writes it. */
   onStderr?: (line: string) => void;
+  /** Written to the helper's stdin, e.g. extract-batch's requests line. */
+  stdin?: string;
 }
 
 const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 /** All of a stream's text, handing on each non-blank line as it arrives. */
 async function readLines(
@@ -43,10 +46,16 @@ async function readLines(
   return text;
 }
 
+/**
+ * Run uv with a pipe on its stdin that stays open until uv exits or the run
+ * is aborted. The helper, run with --watch-stdin, exits when that pipe
+ * closes, so a swamp that dies, even by SIGKILL, takes the helper with it.
+ */
 async function uv(
   settings: UvSettings,
   args: string[],
   env: Record<string, string> = {},
+  input?: string,
   onStderr?: (line: string) => void,
 ) {
   try {
@@ -56,17 +65,27 @@ async function uv(
     const child = new Deno.Command(settings.uvPath, {
       args,
       env,
-      stdin: "null",
+      stdin: "piped",
       stdout: "piped",
       stderr: "piped",
       signal: settings.signal,
     }).spawn();
+    const stdin = child.stdin.getWriter();
+    // abort, not close: it closes the pipe at once, even with a write stuck
+    // on a full pipe. Closing only after stdout and stderr end would wait
+    // forever on a helper that outlived uv and still holds them open.
+    const closeStdin = () => stdin.abort().catch(() => {});
+    // A uv that fails before the helper reads breaks the pipe; the run's
+    // own failure says why.
+    if (input) stdin.write(encoder.encode(input)).catch(() => {});
+    child.status.then(closeStdin, closeStdin);
+    settings.signal.addEventListener("abort", closeStdin, { once: true });
     // stderr carries the helper's progress, so it is handed on as it comes.
     const [status, stdout, stderr] = await Promise.all([
       child.status,
       new Response(child.stdout).arrayBuffer(),
       readLines(child.stderr, onStderr),
-    ]);
+    ]).finally(() => settings.signal.removeEventListener("abort", closeStdin));
     return {
       code: status.code,
       stdout: decoder.decode(stdout),
@@ -121,7 +140,7 @@ async function uvRun(
   settings: UvSettings,
   script: string,
   args: string[],
-  { offline, onStderr }: RunOptions,
+  { offline, onStderr, stdin }: RunOptions,
 ) {
   const env: Record<string, string> = {};
   if (settings.hfHome) env.HF_HOME = settings.hfHome;
@@ -135,9 +154,11 @@ async function uvRun(
       ...(offline ? ["--offline"] : []),
       "--script",
       script,
+      "--watch-stdin",
       ...args,
     ],
     env,
+    stdin,
     onStderr,
   );
   return run;

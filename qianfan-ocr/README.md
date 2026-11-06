@@ -116,9 +116,53 @@ wrote; anything else is not this batch's result.
 - **Progress shows as it goes.** Each line the helper writes to stderr, such as
   "item i of n", is logged as soon as it is written.
 - **A batch holds the model for its whole run.** Other runs of `extract` or
-  `extractBatch` on this machine wait until it ends, however long it is.
+  `extractBatch` on this machine wait until it ends, however long it is, unless
+  they set `lockTimeoutSeconds` (below).
 - Two images must not share a record name: give one a `name`, or the batch fails
   before it starts.
+
+### Waiting for the model: `lockTimeoutSeconds`
+
+`extract` and `extractBatch` wait for any other run on this machine to finish
+with the model. By default they wait as long as it takes; with
+`--input lockTimeoutSeconds=600` they give up after ten minutes and fail, naming
+the run that holds the model. A run that had to wait logs who held the model,
+but like all helper output it shows up only once the run ends.
+
+### A helper left running: `stop`
+
+The helper exits when the swamp process that started it goes away, even by
+`kill -9`, so normally nothing is left behind. If one is still running and
+holding the model lock, `stop` finds it and kills it:
+
+```sh
+swamp behavior run ocr stop
+```
+
+It writes a `stop` resource, kept for 7 days:
+
+| Field     | What                                                                       |
+| --------- | -------------------------------------------------------------------------- |
+| `found`   | `running` (a helper held the lock), `stale` (an old record), `none`        |
+| `holder`  | the helper's `pid`, uv's `parentPid`, `startedAt`, `command` and `batchId` |
+| `stopped` | whether it is gone now                                                     |
+| `signal`  | `SIGTERM`, or `SIGKILL` if it had not exited 10 seconds after `SIGTERM`    |
+
+- **It stops a helper started from any repo on this machine.** The model lock is
+  machine-wide, so whichever helper holds it is the one stopped, whatever
+  started it.
+- **It only signals a qianfan-ocr helper.** The helper records its PID in
+  `~/.cache/qianfan-ocr/holder.json` (under `XDG_CACHE_HOME` if set). A helper
+  that was killed leaves that file behind, so `stop` acts only while the PID is
+  still a process running `qianfan_ocr.py`; otherwise it reports `stale` and
+  signals nothing.
+- **Run it on the same instance after swamp has died.** swamp lets one method
+  run at a time on an instance, but a lock left by a swamp process that is no
+  longer running is released on the next run. If it is not, see
+  `swamp datastore lock status`, and
+  `swamp datastore lock release --force
+  --model @zts/qianfan-ocr/<id>`. To
+  stop a run whose swamp is still alive, cancel that run instead.
 
 ### Global arguments
 
@@ -146,6 +190,10 @@ newer one, and run `install` with it first.
   other instances or repos queue rather than load several copies at once.
 - **Aborting a run stops the model.** Cancelling the swamp run stops uv and the
   Python process with it, and the model lock is released.
+- **The helper goes when swamp goes.** swamp holds the helper's stdin open for
+  the whole run; when it closes, because swamp exited, crashed or was killed,
+  the helper stops at once and the model lock is released. `extractBatch` sends
+  its list of images on stdin, so a killed run leaves no files behind.
 - **The model's tokenizer is Qwen2's.** The helper loads it with
   `fix_mistral_regex=False`, which silences a transformers warning that misreads
   the model as a Mistral one; setting it to true would break tokenization.

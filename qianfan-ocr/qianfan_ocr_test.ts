@@ -121,12 +121,14 @@ Deno.test("extract runs the helper offline on the image and records what it read
         "--offline",
         "--script",
         "/ext/qianfan-ocr/helper/qianfan_ocr.py",
+        "--watch-stdin",
         "extract",
         `--image=${f.repoDir}/scans/My Scan (1).png`,
         "--prompt=Read the title",
         `--model=${DEFAULT_MODEL}`,
         `--revision=${DEFAULT_REVISION}`,
         "--max-new-tokens=256",
+        "--batch-id=ocr-My-Scan-1",
       ]);
     },
   );
@@ -406,6 +408,11 @@ Deno.test("extractBatch writes an ocr record per item and a batch record, with o
 
       const calls = await fakeUvCalls(f.fake);
       assertEquals(calls.length, 1);
+      assertEquals(
+        calls[0].argv.filter((a) => a.startsWith("--requests")),
+        [],
+      );
+      assertEquals(calls[0].argv.at(-1), "--batch-id=batch-post");
       assertEquals(calls[0].requests, [
         {
           id: "0",
@@ -449,7 +456,11 @@ Deno.test("extractBatch passes model and revision to the helper", async () => {
       const [call] = await fakeUvCalls(f.fake);
       assertEquals(call.argv.includes("--offline"), true);
       assertEquals(call.argv.at(-4), "extract-batch");
-      assertEquals(call.argv.slice(-2), ["--model=me/ocr", "--revision=f00"]);
+      assertEquals(call.argv.slice(-3, -1), [
+        "--model=me/ocr",
+        "--revision=f00",
+      ]);
+      assertMatch(call.argv.at(-1)!, /^--batch-id=batch-\d{4}-/);
       assertEquals(batchRecord(written).data.revision, "f00");
     },
   );
@@ -613,17 +624,6 @@ Deno.test("extractBatch writes nothing when the helper fails before any item", a
   });
 });
 
-Deno.test("extractBatch removes its requests file afterwards", async () => {
-  await withFixture({ FAKE_UV_RUN: "helper-error" }, async (f) => {
-    await batchFixture(f);
-    await run(f, "extractBatch", { items: ITEMS });
-    const [call] = await fakeUvCalls(f.fake);
-    const requests = call.argv.find((a) => a.startsWith("--requests="))!
-      .slice("--requests=".length);
-    await assertRejects(() => Deno.stat(requests), Deno.errors.NotFound);
-  });
-});
-
 Deno.test("extractBatch names its batch record after the time by default", async () => {
   await withFixture(
     {
@@ -726,38 +726,195 @@ Deno.test("extractBatch records items as errors when the helper printed no start
   );
 });
 
-Deno.test("extractBatch still writes its records when removing its temp dir fails", async () => {
+Deno.test("extract and extractBatch pass lockTimeoutSeconds to the helper, and only when set", async () => {
   await withFixture(
     {
-      FAKE_UV_STDOUT: jsonLines(START, item("0", "a"), {
-        type: "end",
-        count: 1,
-      }),
+      FAKE_UV_STDOUT: JSON.stringify(EXTRACTED),
     },
     async (f) => {
       await batchFixture(f);
-      const remove = Deno.remove;
-      const kept: string[] = [];
-      Deno.remove = (path, options) => {
-        if (!String(path).includes("qianfan-ocr-")) {
-          return remove(path, options);
-        }
-        kept.push(String(path));
-        return Promise.reject(new Error("resource busy"));
-      };
+      await run(f, "extract", {
+        imagePath: "scans/a.png",
+        prompt: "p",
+        lockTimeoutSeconds: 30,
+      });
+      await run(f, "extract", { imagePath: "scans/a.png", prompt: "p" });
+      await run(f, "extractBatch", {
+        items: [ITEMS[0]],
+        lockTimeoutSeconds: 1.5,
+      });
+      const [timed, untimed, batch] = await fakeUvCalls(f.fake);
+      assertEquals(timed.argv.at(-1), "--lock-timeout=30");
+      assertEquals(
+        untimed.argv.some((a) => a.startsWith("--lock-timeout")),
+        false,
+      );
+      assertEquals(batch.argv.at(-1), "--lock-timeout=1.5");
+    },
+  );
+});
+
+/** Whether a process with this pid is running (and not a zombie). */
+async function running(pid: number): Promise<boolean> {
+  const { stdout } = await new Deno.Command("ps", {
+    args: ["-o", "stat=", "-p", String(pid)],
+    stdout: "piped",
+    stderr: "null",
+  }).output();
+  const state = new TextDecoder().decode(stdout).trim();
+  return state !== "" && !state.startsWith("Z");
+}
+
+async function waitFor(condition: () => Promise<boolean>, seconds: number) {
+  const deadline = Date.now() + seconds * 1000;
+  while (Date.now() < deadline) {
+    if (await condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return await condition();
+}
+
+const exists = (path: string) => Deno.stat(path).then(() => true, () => false);
+
+Deno.test("killing swamp mid-batch stops the helper and leaves no temp folder", async () => {
+  const pidFile = await Deno.makeTempFile({ prefix: "qianfan-ocr-test-pid-" });
+  await Deno.remove(pidFile);
+  await withFixture(
+    { FAKE_UV_RUN: "hold", FAKE_UV_PIDFILE: pidFile },
+    async (f) => {
+      await batchFixture(f);
+      const tmp = `${f.fake.dir}/tmp`;
+      await Deno.mkdir(tmp);
+      const driver = new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--quiet",
+          "--allow-all",
+          "--no-config",
+          new URL("./testdata/kill_driver.ts", import.meta.url).pathname,
+          f.fake.uvPath,
+          f.repoDir,
+        ],
+        env: { TMPDIR: tmp },
+        stdin: "null",
+        stdout: "null",
+        stderr: "null",
+      }).spawn();
+      let helperPid = 0;
       try {
-        const { written, error, logs } = await run(f, "extractBatch", {
-          items: [ITEMS[0]],
-        });
-        assertEquals(error, null);
-        assertEquals(written.map((w) => w.specName), ["ocr", "batch"]);
-        const warning = logs.find((l) => l.level === "warning");
-        assertExists(warning);
-        assertStringIncludes(warning.message, "temp");
+        assertEquals(await waitFor(() => exists(pidFile), 30), true);
+        helperPid = Number(await Deno.readTextFile(pidFile));
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        assertEquals(
+          await exists(`${pidFile}.eof`),
+          false,
+          "the helper's stdin closed while swamp was alive",
+        );
+        driver.kill("SIGKILL");
+        await driver.status;
+        assertEquals(
+          await waitFor(async () => !await running(helperPid), 10),
+          true,
+          "the helper outlived swamp",
+        );
+        assertEquals(await exists(`${pidFile}.eof`), true);
+        const left = [];
+        for await (const entry of Deno.readDir(tmp)) {
+          if (entry.name.startsWith("qianfan-ocr-")) left.push(entry.name);
+        }
+        assertEquals(left, []);
       } finally {
-        Deno.remove = remove;
-        for (const path of kept) await remove(path, { recursive: true });
+        if (helperPid && await running(helperPid)) {
+          Deno.kill(helperPid, "SIGKILL");
+        }
+        try {
+          driver.kill("SIGKILL");
+        } catch { /* already gone */ }
+        await driver.status;
+        await Deno.remove(`${pidFile}.eof`).catch(() => {});
+        await Deno.remove(pidFile).catch(() => {});
       }
     },
   );
+});
+
+Deno.test("stop records that nothing was running when no helper holds the lock", async () => {
+  const cache = await Deno.makeTempDir({ prefix: "qianfan-ocr-test-" });
+  const before = Deno.env.get("XDG_CACHE_HOME");
+  Deno.env.set("XDG_CACHE_HOME", cache);
+  try {
+    await withFixture({}, async (f) => {
+      const { written, logs, error } = await run(f, "stop", {});
+      assertEquals(error, null);
+      assertEquals(written.length, 1);
+      assertEquals(written[0].specName, "stop");
+      assertEquals(written[0].name, "stop");
+      assertEquals(written[0].data.found, "none");
+      assertEquals(written[0].data.stopped, false);
+      assertExists(written[0].data.stoppedAt);
+      assertStringIncludes(
+        logs.map((l) => l.message).join("\n"),
+        "No qianfan-ocr helper holds the model lock",
+      );
+      // Before it signals anything, stop says where it is looking.
+      assertStringIncludes(logs[0].message, "Looking for");
+      assertEquals(logs[0].args[0], {
+        path: `${cache}/qianfan-ocr/holder.json`,
+      });
+    });
+  } finally {
+    if (before === undefined) Deno.env.delete("XDG_CACHE_HOME");
+    else Deno.env.set("XDG_CACHE_HOME", before);
+    await Deno.remove(cache, { recursive: true });
+  }
+});
+
+Deno.test("stop reports a stale holder record without killing anything", async () => {
+  const cache = await Deno.makeTempDir({ prefix: "qianfan-ocr-test-" });
+  const before = Deno.env.get("XDG_CACHE_HOME");
+  Deno.env.set("XDG_CACHE_HOME", cache);
+  try {
+    await Deno.mkdir(`${cache}/qianfan-ocr`);
+    const dead = new Deno.Command("true").spawn();
+    await dead.status;
+    await Deno.writeTextFile(
+      `${cache}/qianfan-ocr/holder.json`,
+      JSON.stringify({ pid: dead.pid, batchId: "batch-old" }),
+    );
+    await withFixture({}, async (f) => {
+      const { written, logs } = await run(f, "stop", {});
+      assertEquals(written[0].data.found, "stale");
+      // deno-lint-ignore no-explicit-any
+      assertEquals((written[0].data as any).holder.batchId, "batch-old");
+      assertEquals(written[0].data.stopped, false);
+      const stale = logs.find((l) => l.message.includes("no longer"));
+      assertExists(stale);
+      assertEquals(stale.args[0], { pid: dead.pid, batchId: "batch-old" });
+    });
+  } finally {
+    if (before === undefined) Deno.env.delete("XDG_CACHE_HOME");
+    else Deno.env.set("XDG_CACHE_HOME", before);
+    await Deno.remove(cache, { recursive: true });
+  }
+});
+
+Deno.test("stop records an unreadable holder record as stale", async () => {
+  const cache = await Deno.makeTempDir({ prefix: "qianfan-ocr-test-" });
+  const before = Deno.env.get("XDG_CACHE_HOME");
+  Deno.env.set("XDG_CACHE_HOME", cache);
+  try {
+    await Deno.mkdir(`${cache}/qianfan-ocr`);
+    await Deno.writeTextFile(`${cache}/qianfan-ocr/holder.json`, "{not json");
+    await withFixture({}, async (f) => {
+      const { written, error, logs } = await run(f, "stop", {});
+      assertEquals(error, null);
+      assertEquals(written[0].data.found, "stale");
+      assertEquals(written[0].data.holder, null);
+      assertExists(logs.find((l) => l.message.includes("could not be read")));
+    });
+  } finally {
+    if (before === undefined) Deno.env.delete("XDG_CACHE_HOME");
+    else Deno.env.set("XDG_CACHE_HOME", before);
+    await Deno.remove(cache, { recursive: true });
+  }
 });
