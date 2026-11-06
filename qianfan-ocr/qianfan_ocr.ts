@@ -594,7 +594,12 @@ export const behavior = {
         _args: z.input<typeof StopArgsSchema>,
         context: Context,
       ) => {
-        const result = await stopHolder(holderPath());
+        const path = holderPath();
+        context.logger.info(
+          "Looking for the helper holding the model lock in {path}",
+          { path },
+        );
+        const result = await stopHolder(path);
         const holder = result.holder;
         if (result.found === "none") {
           context.logger.info("No qianfan-ocr helper holds the model lock");

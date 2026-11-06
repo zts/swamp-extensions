@@ -856,6 +856,11 @@ Deno.test("stop records that nothing was running when no helper holds the lock",
         logs.map((l) => l.message).join("\n"),
         "No qianfan-ocr helper holds the model lock",
       );
+      // Before it signals anything, stop says where it is looking.
+      assertStringIncludes(logs[0].message, "Looking for");
+      assertEquals(logs[0].args[0], {
+        path: `${cache}/qianfan-ocr/holder.json`,
+      });
     });
   } finally {
     if (before === undefined) Deno.env.delete("XDG_CACHE_HOME");
