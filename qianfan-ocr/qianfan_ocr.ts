@@ -3,11 +3,12 @@
  * Python helper that uv runs, so torch and transformers stay out of Deno.
  * install builds the helper's environment and downloads the model; extract
  * reads one image and extractBatch many with one model load, and neither
- * ever downloads.
+ * ever downloads; stop stops a helper that outlived the run that started it.
  *
  * @module
  */
 import { z } from "npm:zod@4.6.7";
+import { holderPath, stopHolder } from "./lock_holder.ts";
 import {
   environmentExists,
   runHelper,
@@ -89,6 +90,8 @@ const ExtractBatchArgsSchema = z.object({
   lockTimeoutSeconds,
 });
 
+const StopArgsSchema = z.object({});
+
 const OcrSchema = z.object({
   image: z.string(),
   prompt: z.string(),
@@ -133,6 +136,22 @@ const BatchSchema = z.object({
     "Why the helper failed part way, if it did",
   ),
   startedAt: z.string(),
+});
+
+const StopSchema = z.object({
+  found: z.enum(["running", "stale", "none"]).describe(
+    "running: a live helper held the model lock; stale: holder.json named a process that is gone or not a helper; none: no holder.json",
+  ),
+  holder: z.object({
+    pid: z.number(),
+    parentPid: z.number().optional(),
+    startedAt: z.string().optional(),
+    command: z.string().nullable().optional(),
+    batchId: z.string().nullable().optional(),
+  }).nullable().describe("What the helper recorded about itself"),
+  stopped: z.boolean(),
+  signal: z.enum(["SIGTERM", "SIGKILL"]).nullable(),
+  stoppedAt: z.string(),
 });
 
 const InstallSchema = z.object({
@@ -235,6 +254,13 @@ export const behavior = {
       description:
         "One extractBatch: each image's outcome and the ocr record it wrote",
       schema: BatchSchema,
+      lifetime: "7d",
+      garbageCollection: 10,
+    },
+    "stop": {
+      description:
+        "The last stop: which helper held the model lock, and whether it was stopped",
+      schema: StopSchema,
       lifetime: "7d",
       garbageCollection: 10,
     },
@@ -556,6 +582,49 @@ export const behavior = {
         // which ocr records this batch wrote.
         if (failure) throw new Error(failure);
         return { dataHandles: handles };
+      },
+    },
+    stop: {
+      description:
+        "Stop the helper holding the model lock, e.g. one left running after swamp died",
+      arguments: StopArgsSchema,
+      execute: async (
+        _args: z.input<typeof StopArgsSchema>,
+        context: Context,
+      ) => {
+        const result = await stopHolder(holderPath());
+        const holder = result.holder;
+        if (result.found === "none") {
+          context.logger.info("No qianfan-ocr helper holds the model lock");
+        } else if (result.found === "stale") {
+          context.logger.info(
+            "holder.json names pid {pid} ({batchId}), which is no longer a qianfan-ocr helper; nothing to stop",
+            { pid: holder!.pid, batchId: holder!.batchId ?? null },
+          );
+        } else if (result.stopped) {
+          context.logger.info(
+            "Stopped pid {pid} ({command} {batchId}, since {startedAt}) with {signal}; the model lock is free",
+            { ...holder, signal: result.signal },
+          );
+        } else {
+          context.logger.warning(
+            "pid {pid} ({command} {batchId}) is still running after {signal}",
+            { ...holder, signal: result.signal },
+          );
+        }
+        const handle = await context.writeResource(
+          "stop",
+          "stop",
+          StopSchema.parse({ ...result, stoppedAt: new Date().toISOString() }),
+        );
+        if (result.found === "running" && !result.stopped) {
+          throw new Error(
+            `qianfan-ocr helper pid ${
+              holder!.pid
+            } is still running after ${result.signal}`,
+          );
+        }
+        return { dataHandles: [handle] };
       },
     },
   },

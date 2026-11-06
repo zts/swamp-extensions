@@ -837,3 +837,58 @@ Deno.test("killing swamp mid-batch stops the helper and leaves no temp folder", 
     },
   );
 });
+
+Deno.test("stop records that nothing was running when no helper holds the lock", async () => {
+  const cache = await Deno.makeTempDir({ prefix: "qianfan-ocr-test-" });
+  const before = Deno.env.get("XDG_CACHE_HOME");
+  Deno.env.set("XDG_CACHE_HOME", cache);
+  try {
+    await withFixture({}, async (f) => {
+      const { written, logs, error } = await run(f, "stop", {});
+      assertEquals(error, null);
+      assertEquals(written.length, 1);
+      assertEquals(written[0].specName, "stop");
+      assertEquals(written[0].name, "stop");
+      assertEquals(written[0].data.found, "none");
+      assertEquals(written[0].data.stopped, false);
+      assertExists(written[0].data.stoppedAt);
+      assertStringIncludes(
+        logs.map((l) => l.message).join("\n"),
+        "No qianfan-ocr helper holds the model lock",
+      );
+    });
+  } finally {
+    if (before === undefined) Deno.env.delete("XDG_CACHE_HOME");
+    else Deno.env.set("XDG_CACHE_HOME", before);
+    await Deno.remove(cache, { recursive: true });
+  }
+});
+
+Deno.test("stop reports a stale holder record without killing anything", async () => {
+  const cache = await Deno.makeTempDir({ prefix: "qianfan-ocr-test-" });
+  const before = Deno.env.get("XDG_CACHE_HOME");
+  Deno.env.set("XDG_CACHE_HOME", cache);
+  try {
+    await Deno.mkdir(`${cache}/qianfan-ocr`);
+    const dead = new Deno.Command("true").spawn();
+    await dead.status;
+    await Deno.writeTextFile(
+      `${cache}/qianfan-ocr/holder.json`,
+      JSON.stringify({ pid: dead.pid, batchId: "batch-old" }),
+    );
+    await withFixture({}, async (f) => {
+      const { written, logs } = await run(f, "stop", {});
+      assertEquals(written[0].data.found, "stale");
+      // deno-lint-ignore no-explicit-any
+      assertEquals((written[0].data as any).holder.batchId, "batch-old");
+      assertEquals(written[0].data.stopped, false);
+      const stale = logs.find((l) => l.message.includes("no longer"));
+      assertExists(stale);
+      assertEquals(stale.args[0], { pid: dead.pid, batchId: "batch-old" });
+    });
+  } finally {
+    if (before === undefined) Deno.env.delete("XDG_CACHE_HOME");
+    else Deno.env.set("XDG_CACHE_HOME", before);
+    await Deno.remove(cache, { recursive: true });
+  }
+});
