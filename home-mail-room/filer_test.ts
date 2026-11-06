@@ -12,12 +12,29 @@ interface ScannerRecord {
 
 const BILL = "FileCabinet/Thames Water/2023-05-18 Thames Water bill.pdf";
 
+/** Repos setup made for the running test, removed when it ends. */
+const repos: string[] = [];
+
+/** Deno.test, removing the repos the test set up once it ends. */
+function test(name: string, fn: () => Promise<void>) {
+  Deno.test(name, async () => {
+    try {
+      await fn();
+    } finally {
+      for (const dir of repos.splice(0)) {
+        await Deno.remove(dir, { recursive: true });
+      }
+    }
+  });
+}
+
 /**
  * A repo with Inbound/ReadyToFile and a FileCabinet holding the given sender
  * folders, and a fake context for the filer reading the scanner's records.
  */
 async function setup(folders: string[] = ["Thames Water"]) {
   const repoDir = await Deno.makeTempDir({ prefix: "home-mail-room-filer-" });
+  repos.push(repoDir);
   await Deno.mkdir(`${repoDir}/Inbound/ReadyToFile`, { recursive: true });
   for (const f of folders) {
     await Deno.mkdir(`${repoDir}/FileCabinet/${f}`, { recursive: true });
@@ -158,7 +175,7 @@ async function exists(path: string): Promise<boolean> {
   return await Deno.stat(path).then(() => true, () => false);
 }
 
-Deno.test("fileReady files a clean letter and archives its original unchanged", async () => {
+test("fileReady files a clean letter and archives its original unchanged", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -178,7 +195,7 @@ Deno.test("fileReady files a clean letter and archives its original unchanged", 
   );
 });
 
-Deno.test("a filed letter's record and header expire after the retention", async () => {
+test("a filed letter's record and header expire after the retention", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -186,7 +203,7 @@ Deno.test("a filed letter's record and header expire after the retention", async
   assertEquals(s.lifetimes.get(letter.id.replace("letter-", "header-")), "30d");
 });
 
-Deno.test("fileReady holds a letter whose sender has no cabinet folder, leaving it in ReadyToFile", async () => {
+test("fileReady holds a letter whose sender has no cabinet folder, leaving it in ReadyToFile", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -200,7 +217,7 @@ Deno.test("fileReady holds a letter whose sender has no cabinet folder, leaving 
   assertEquals(s.files.has(letter.id.replace("letter-", "header-")), true);
 });
 
-Deno.test("fileReady holds a letter it could not read a date or type from", async () => {
+test("fileReady holds a letter it could not read a date or type from", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf", {
     date: "sometime",
@@ -213,7 +230,7 @@ Deno.test("fileReady holds a letter it could not read a date or type from", asyn
   ]);
 });
 
-Deno.test("fileReady holds a letter nothing was read off, saying how to read it", async () => {
+test("fileReady holds a letter nothing was read off, saying how to read it", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf", null);
   await s.fileReady();
@@ -225,7 +242,7 @@ Deno.test("fileReady holds a letter nothing was read off, saying how to read it"
   );
 });
 
-Deno.test("fileReady marks a conflict when another file holds the destination", async () => {
+test("fileReady marks a conflict when another file holds the destination", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf");
   await Deno.writeTextFile(`${s.repoDir}/${BILL}`, "another letter");
@@ -240,7 +257,7 @@ Deno.test("fileReady marks a conflict when another file holds the destination", 
   assertEquals(await exists(letter.path), true);
 });
 
-Deno.test("fileReady reviews a held letter again, filing it once its folder exists", async () => {
+test("fileReady reviews a held letter again, filing it once its folder exists", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -252,7 +269,7 @@ Deno.test("fileReady reviews a held letter again, filing it once its folder exis
   assertEquals(s.stored.get(letter.id)!.state, "filed");
 });
 
-Deno.test("fileReady leaves a letter a person has decided alone", async () => {
+test("fileReady leaves a letter a person has decided alone", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -270,7 +287,7 @@ Deno.test("fileReady leaves a letter a person has decided alone", async () => {
   assertEquals(s.stored.get(letter.id), decided);
 });
 
-Deno.test("fileReady moves a copy of a letter already filed straight to Archived", async () => {
+test("fileReady moves a copy of a letter already filed straight to Archived", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -288,7 +305,7 @@ Deno.test("fileReady moves a copy of a letter already filed straight to Archived
   assertEquals(s.stored.get(letter.id), filed);
 });
 
-Deno.test("fileReady reviews a skipped letter put back into ReadyToFile", async () => {
+test("fileReady reviews a skipped letter put back into ReadyToFile", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -303,7 +320,7 @@ Deno.test("fileReady reviews a skipped letter put back into ReadyToFile", async 
   assertEquals(s.stored.get(letter.id)!.state, "filed");
 });
 
-Deno.test("fileReady drops the record of a held letter whose file left ReadyToFile", async () => {
+test("fileReady drops the record of a held letter whose file left ReadyToFile", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -313,7 +330,7 @@ Deno.test("fileReady drops the record of a held letter whose file left ReadyToFi
   assertEquals(s.files.has(letter.id.replace("letter-", "header-")), false);
 });
 
-Deno.test("a letter whose destination already holds it counts as filed", async () => {
+test("a letter whose destination already holds it counts as filed", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf");
   await Deno.writeFile(`${s.repoDir}/${BILL}`, letter.bytes);
@@ -321,7 +338,7 @@ Deno.test("a letter whose destination already holds it counts as filed", async (
   assertEquals(s.stored.get(letter.id)!.state, "filed");
 });
 
-Deno.test("filing again after the original was archived finishes the job", async () => {
+test("filing again after the original was archived finishes the job", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -337,7 +354,7 @@ Deno.test("filing again after the original was archived finishes the job", async
   assertEquals(await Deno.readFile(`${s.repoDir}/${BILL}`), letter.bytes);
 });
 
-Deno.test("a letter changed since it was scanned is held, not filed", async () => {
+test("a letter changed since it was scanned is held, not filed", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -355,7 +372,7 @@ Deno.test("a letter changed since it was scanned is held, not filed", async () =
   );
 });
 
-Deno.test("decide files a held letter with the person's sender and file name", async () => {
+test("decide files a held letter with the person's sender and file name", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf", { sender: "Halifax" });
   await s.fileReady();
@@ -370,7 +387,7 @@ Deno.test("decide files a held letter with the person's sender and file name", a
   assertEquals(s.stored.get(letter.id)!.state, "filed");
 });
 
-Deno.test("decide does not overwrite another file unless told to", async () => {
+test("decide does not overwrite another file unless told to", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf");
   await Deno.writeTextFile(`${s.repoDir}/${BILL}`, "another letter");
@@ -387,7 +404,7 @@ Deno.test("decide does not overwrite another file unless told to", async () => {
   assertEquals(await Deno.readFile(`${s.repoDir}/${BILL}`), letter.bytes);
 });
 
-Deno.test("decide moves a skipped letter into Skipped unchanged", async () => {
+test("decide moves a skipped letter into Skipped unchanged", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -399,7 +416,7 @@ Deno.test("decide moves a skipped letter into Skipped unchanged", async () => {
   assertEquals(s.lifetimes.get(letter.id), "30d");
 });
 
-Deno.test("one decision that cannot be applied does not stop the rest", async () => {
+test("one decision that cannot be applied does not stop the rest", async () => {
   const s = await setup([]);
   const a = await s.addLetter("a.pdf", {}, "one");
   const b = await s.addLetter("b.pdf", {}, "two");
@@ -417,7 +434,7 @@ Deno.test("one decision that cannot be applied does not stop the rest", async ()
   assertEquals(s.stored.get(b.id)!.state, "filed");
 });
 
-Deno.test("decide leaves a letter that has already been filed alone", async () => {
+test("decide leaves a letter that has already been filed alone", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -434,7 +451,7 @@ function outcomes(s: Awaited<ReturnType<typeof setup>>, name: string) {
   ) => ({ letter, originalName, outcome, by, destination, reasons }));
 }
 
-Deno.test("fileReady records what happened to each letter in ReadyToFile", async () => {
+test("fileReady records what happened to each letter in ReadyToFile", async () => {
   const s = await setup();
   const filed = await s.addLetter("a.pdf", {}, "one");
   const held = await s.addLetter("b.pdf", { sender: "Nobody Ltd" }, "two");
@@ -459,7 +476,7 @@ Deno.test("fileReady records what happened to each letter in ReadyToFile", async
   ]);
 });
 
-Deno.test("fileReady records the copies it archived and the records it dropped", async () => {
+test("fileReady records the copies it archived and the records it dropped", async () => {
   const s = await setup(["Thames Water"]);
   const filed = await s.addLetter("a.pdf", {}, "one");
   const gone = await s.addLetter("b.pdf", { sender: "Nobody Ltd" }, "two");
@@ -483,7 +500,7 @@ Deno.test("fileReady records the copies it archived and the records it dropped",
   );
 });
 
-Deno.test("fileReady records a letter waiting on a person's decision", async () => {
+test("fileReady records a letter waiting on a person's decision", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
@@ -503,13 +520,13 @@ Deno.test("fileReady records a letter waiting on a person's decision", async () 
   }]);
 });
 
-Deno.test("fileReady records a run that found nothing to file", async () => {
+test("fileReady records a run that found nothing to file", async () => {
   const s = await setup();
   await s.fileReady();
   assertEquals(outcomes(s, "file-ready"), []);
 });
 
-Deno.test("decide records each decision's outcome, refusing ones it cannot apply", async () => {
+test("decide records each decision's outcome, refusing ones it cannot apply", async () => {
   const s = await setup([]);
   const a = await s.addLetter("a.pdf", {}, "one");
   const b = await s.addLetter("b.pdf", {}, "two");
@@ -558,7 +575,7 @@ Deno.test("decide records each decision's outcome, refusing ones it cannot apply
   ]);
 });
 
-Deno.test("decide records a skipped letter", async () => {
+test("decide records a skipped letter", async () => {
   const s = await setup([]);
   const letter = await s.addLetter("a.pdf");
   await s.fileReady();
