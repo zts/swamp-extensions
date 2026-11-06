@@ -47,6 +47,12 @@ const NAME = /^[A-Za-z0-9_-]+$/;
 /** Prefix of the temp dir a batch renders its images into. */
 const SCRATCH = "home-mail-room-scan-";
 
+/**
+ * A first page at least this many times taller than it is wide is a till or
+ * card receipt: A4 is 1.41, US legal 1.65, an 80mm receipt usually over 1.8.
+ */
+const RECEIPT_RATIO = 1.8;
+
 /** Older than this, a batch's temp dir was left by a batch that was killed. */
 const STALE_MS = 24 * 60 * 60 * 1000;
 
@@ -446,8 +452,12 @@ function detailsFrom(
   prompt: string,
   ocrBehavior: string,
   read: Extract<Read, { status: "ok" }>,
+  receipt: boolean,
 ): Details {
   const parsed = isObject(read.ocr.parsed) ? read.ocr.parsed : null;
+  const fields = toDetails(parsed);
+  // The page's shape tells a receipt better than the model's words do.
+  if (receipt) fields.documentType = "receipt";
   return DetailsSchema.parse({
     originalName: pdf.path.slice(pdf.path.lastIndexOf("/") + 1),
     pdfPath: pdf.path,
@@ -455,7 +465,7 @@ function detailsFrom(
     page: a.page,
     fraction,
     dpi: a.dpi,
-    ...toDetails(parsed),
+    ...fields,
     parsedOk: parsed !== null,
     rawOutput: String(read.ocr.rawOutput ?? ""),
     prompt,
@@ -630,6 +640,8 @@ export const behavior = {
         const extracted: Extracted[] = [];
         /** Why a letter could not be rendered: it is no readable PDF. */
         const unrenderable = new Map<string, string>();
+        /** Letters whose first page is shaped like a receipt. */
+        const receipts = new Set<string>();
         try {
           /** Render the top of each letter to <name>.png in tmpDir. */
           const render = async (hashes: string[], fraction: number) => {
@@ -645,6 +657,9 @@ export const behavior = {
                   fraction,
                   dpi: a.dpi,
                 });
+                if (top.pageHeight >= top.width * RECEIPT_RATIO) {
+                  receipts.add(hash);
+                }
                 const path = `${tmpDir}/${name}.png`;
                 await Deno.writeFile(path, top.png);
                 images.set(hash, { name, path });
@@ -727,6 +742,7 @@ export const behavior = {
                 prompt,
                 g.ocrBehavior,
                 ok,
+                receipts.has(hash),
               );
               // details first: if its write fails, no header is left without it.
               const name = shortHash(hash);

@@ -127,6 +127,11 @@ sender matches a cabinet folder and whose date and document type were read:
 FileCabinet/<Sender>/<YYYY-MM-DD> <Sender> <type>.pdf
 ```
 
+The type is one of bill, statement, invoice, reminder, notice, receipt or other,
+as the model read it, except that a letter whose first page is at least 1.8
+times as tall as it is wide is a receipt, whatever the model said: that is the
+shape of a till or card receipt.
+
 A copy goes into the cabinet, is checked against the original, and the original
 moves to `Archived`. It never writes over another file: a letter whose
 destination is taken is held as a conflict. Everything it cannot file is held

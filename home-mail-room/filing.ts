@@ -12,6 +12,7 @@ export const DOCUMENT_TYPES = [
   "invoice",
   "reminder",
   "notice",
+  "receipt",
   "other",
 ] as const;
 

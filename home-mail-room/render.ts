@@ -18,11 +18,15 @@ export interface RenderOptions {
   dpi: number;
 }
 
-/** The rendered region as PNG, its size in pixels, and the page count. */
+/**
+ * The rendered region as PNG, its size in pixels, the whole page's height in
+ * pixels, and the page count.
+ */
 export interface RenderedTop {
   png: Uint8Array;
   width: number;
   height: number;
+  pageHeight: number;
   pageCount: number;
 }
 
@@ -81,7 +85,13 @@ export async function renderTop(
         data: bitmap.data.subarray(0, bitmap.width * height * 4),
         channels: 4,
       });
-      return { png, width: bitmap.width, height, pageCount };
+      return {
+        png,
+        width: bitmap.width,
+        height,
+        pageHeight: bitmap.height,
+        pageCount,
+      };
     } finally {
       document.destroy();
     }

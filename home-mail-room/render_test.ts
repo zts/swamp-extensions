@@ -39,6 +39,11 @@ Deno.test("renderTop renders the whole page when fraction is 1", async () => {
   assertAlmostEquals(top.height, 842, 1);
 });
 
+Deno.test("renderTop reports the whole page's height when it renders only the top", async () => {
+  const top = await renderTop(SAMPLE, { page: 1, fraction: 0.25, dpi: 72 });
+  assertAlmostEquals(top.pageHeight, 842, 1);
+});
+
 Deno.test("renderTop renders the page asked for", async () => {
   const one = await renderTop(SAMPLE, { page: 1, fraction: 0.25, dpi: 72 });
   const two = await renderTop(SAMPLE, { page: 2, fraction: 0.25, dpi: 72 });

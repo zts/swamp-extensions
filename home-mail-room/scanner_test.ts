@@ -266,6 +266,38 @@ Deno.test("scanBatch reads a letter's top with one extractBatch, records it by c
   });
 });
 
+/** A one-page blank PDF, its page the given size in points. */
+function blankPdf(width: number, height: number): Uint8Array {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] >>`,
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = objects.map((body, i) => {
+    const at = pdf.length;
+    pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+    return at;
+  });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n` +
+    offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("") +
+    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n` +
+    `startxref\n${xref}\n%%EOF\n`;
+  return new TextEncoder().encode(pdf);
+}
+
+Deno.test("scanBatch records a long, narrow page as a receipt, whatever the model called it", async () => {
+  await withRepo(async (repoDir) => {
+    // A card receipt: 80mm by 200mm.
+    await Deno.writeFile(incoming(repoDir, "till.pdf"), blankPdf(227, 567));
+    const { details } = await scan(repoDir);
+    const d = details[0].data as Record<string, unknown>;
+    assertEquals(d.documentType, "receipt");
+    assertEquals(d.documentTypeRaw, "Statement");
+  });
+});
+
 Deno.test("scanBatch reads the whole page of a letter whose top showed no sender, with a second extractBatch", async () => {
   await withRepo(async (repoDir) => {
     await Deno.writeFile(incoming(repoDir, "a.pdf"), SAMPLE);
