@@ -571,8 +571,10 @@ def _wait_for(condition, seconds):
 
 
 def test_the_helper_exits_when_its_parent_is_killed_mid_batch(tmp_path):
-    """A parent holds the helper's stdin open, as swamp does; SIGKILL it part
-    way through a batch and the helper must exit and free the lock."""
+    """A parent holds the helper's stdin, stdout and stderr, as swamp does;
+    SIGKILL it part way through a batch and the helper must exit and free the
+    lock at once, though its stderr is now a broken pipe too. Each image takes
+    30s, so finishing the current one before exiting fails the test."""
     stub = _stub_helper(tmp_path)
     cache = tmp_path / "cache"
     lock = cache / "qianfan-ocr" / "model.lock"
@@ -589,7 +591,7 @@ def test_the_helper_exits_when_its_parent_is_killed_mid_batch(tmp_path):
                 import subprocess, sys, time
                 helper = subprocess.Popen(
                     [sys.executable, {str(stub)!r}, "--watch-stdin", "extract-batch", "--batch-id=b1"],
-                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
                 helper.stdin.write({requests.encode()!r})
                 helper.stdin.flush()
@@ -600,7 +602,7 @@ def test_the_helper_exits_when_its_parent_is_killed_mid_batch(tmp_path):
         ],
         stdout=subprocess.PIPE,
         text=True,
-        env={"PATH": "/usr/bin:/bin", "XDG_CACHE_HOME": str(cache), "STUB_GENERATE_S": "1"},
+        env={"PATH": "/usr/bin:/bin", "XDG_CACHE_HOME": str(cache), "STUB_GENERATE_S": "30"},
     )
     helper_pid = int(parent.stdout.readline())
     try:

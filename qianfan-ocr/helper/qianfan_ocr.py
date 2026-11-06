@@ -397,10 +397,14 @@ def exit_when_stdin_closes():
     """
 
     def watch():
-        while os.read(0, 4096):
-            pass
-        print("stdin closed: the caller has gone, stopping", file=sys.stderr, flush=True)
-        os._exit(1)
+        try:
+            while os.read(0, 4096):
+                pass
+            print("stdin closed: the caller has gone, stopping", file=sys.stderr, flush=True)
+        except OSError:
+            pass  # stderr went with the caller: a broken pipe must not stop the exit
+        finally:
+            os._exit(1)
 
     threading.Thread(target=watch, name="stdin-watch", daemon=True).start()
 
