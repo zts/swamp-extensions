@@ -291,17 +291,26 @@ export async function runFilerMethod(
   input: Record<string, unknown>,
   run: CommandRunner = runCommand,
 ): Promise<void> {
-  const { code, stdout, stderr } = await run("swamp", [
-    "behavior",
-    "run",
-    filer,
-    method,
-    // A person's text is data, never an expression or an @file.
-    "--literal-inputs",
-    "--input",
-    JSON.stringify(input),
-    "--json",
-  ], repoDir);
+  let output: CommandOutput;
+  try {
+    output = await run("swamp", [
+      "behavior",
+      "run",
+      filer,
+      method,
+      // A person's text is data, never an expression or an @file.
+      "--literal-inputs",
+      "--input",
+      JSON.stringify(input),
+      "--json",
+    ], repoDir);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+    throw new Error(
+      "swamp is not on PATH: the review page files letters through the swamp CLI",
+    );
+  }
+  const { code, stdout, stderr } = output;
   if (code !== 0) {
     const text = new TextDecoder();
     throw new Error(

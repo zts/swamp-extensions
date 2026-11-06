@@ -303,3 +303,17 @@ Deno.test("a failed run that wrote no JSON gives its last lines", async () => {
   );
   assertEquals((error as Error).message, "two three four");
 });
+
+Deno.test("swamp missing from PATH is said plainly", async () => {
+  // What Deno.Command throws for a command it cannot find.
+  const swamp = fakeSwamp(
+    new Deno.errors.NotFound("Failed to spawn 'swamp': entity not found"),
+  );
+  const error = await assertRejects(() =>
+    runFilerMethod("/repo", "filer", "decide", { decisions: [] }, swamp.run)
+  );
+  assertEquals(
+    (error as Error).message,
+    "swamp is not on PATH: the review page files letters through the swamp CLI",
+  );
+});
