@@ -254,8 +254,11 @@ function swampError(out: string): string {
 
 /** What a command gave back once it ended. */
 export interface CommandOutput {
+  /** The exit code. */
   code: number;
+  /** All it wrote to stdout. */
   stdout: Uint8Array;
+  /** All it wrote to stderr. */
   stderr: Uint8Array;
 }
 
