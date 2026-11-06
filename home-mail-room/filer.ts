@@ -441,6 +441,8 @@ export const behavior = {
   type: "@zts/home-mail-room/filer",
   version: "2026.11.06.1",
   globalArguments: GlobalArgsSchema,
+  // After every run, including each decide the review page makes.
+  reports: ["@zts/home-mail-room/letters"],
   resources: {
     "letter": {
       description:

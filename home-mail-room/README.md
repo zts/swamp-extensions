@@ -155,6 +155,16 @@ The page is its own behavior so a review session never holds the filer, and it
 sends decisions through the swamp CLI because a method may call another behavior
 with `runModel` only 100 times per run.
 
+Every decision the page sends is a run of the filer's `decide`, and after every
+`decide` and `fileReady` the `@zts/home-mail-room/letters` report lists what
+that run did, the letters still waiting for review, and every letter filed or
+skipped in the last `retention`, newest first, saying whether the filer or a
+person decided it. Its latest version is the log of what has been filed:
+
+```sh
+swamp report get @zts/home-mail-room/letters --behavior filer
+```
+
 To decide without the page:
 
 ```sh

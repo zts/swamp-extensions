@@ -59,7 +59,7 @@ interface ScanBatch {
   error: string | null;
 }
 
-interface Row {
+export interface Row {
   letter: string;
   result: string;
   notes: string;
@@ -75,7 +75,7 @@ const SCANNED: Record<ScanBatch["letters"][number]["status"], string> = {
   error: "Left in Incoming",
 };
 
-/** The filer's outcomes, as the report words them. */
+/** The filer's outcomes, as the reports word them. */
 const FILED: Record<Run["letters"][number]["outcome"], string> = {
   filed: "Filed",
   held: "Held for review",
@@ -111,7 +111,7 @@ export function cabinetName(path: string): string {
   return path.split("/").slice(-2).join("/");
 }
 
-function cell(text: string): string {
+export function cell(text: string): string {
   return text.replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ");
 }
 
@@ -123,6 +123,21 @@ export function table(rows: Row[], notes: string): string {
       `| ${cell(r.letter)} | ${cell(r.result)} | ${cell(r.notes)} |`
     ),
   ].join("\n");
+}
+
+/** A filer run's letters as table rows. */
+export function filerRows(
+  letters: Run["letters"],
+): (Row & { outcome: string })[] {
+  return letters.map((l) => ({
+    letter: l.originalName || l.letter,
+    outcome: l.outcome,
+    result: FILED[l.outcome],
+    notes: [
+      l.destination ? cabinetName(l.destination) : "",
+      ...l.reasons,
+    ].filter(Boolean).join("; "),
+  }));
 }
 
 function tally<T extends string>(values: T[]): Partial<Record<T, number>> {
@@ -201,16 +216,7 @@ export const report = {
           : "The file step did not run; letters in ReadyToFile wait for the next run",
       );
     }
-    const fileRows: (Row & { outcome: string })[] = (filing?.letters ?? [])
-      .map((l) => ({
-        letter: l.originalName,
-        outcome: l.outcome,
-        result: FILED[l.outcome],
-        notes: [
-          l.destination ? cabinetName(l.destination) : "",
-          ...l.reasons,
-        ].filter(Boolean).join("; "),
-      }));
+    const fileRows = filerRows(filing?.letters ?? []);
 
     const scanned = tally(scanRows.map((r) => r.status));
     const filed = tally(fileRows.map((r) => r.outcome));
