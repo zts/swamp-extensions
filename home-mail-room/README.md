@@ -160,6 +160,12 @@ swamp behavior run filer decide --literal-inputs --input \
 | scanner  | `scan-batch-<run>-<n>` | 7 days                                     |
 | filer    | `letter-<hash>`        | while held; `retention` once filed/skipped |
 | filer    | `header-<hash>` (PNG)  | as its letter                              |
+| filer    | `file-ready`           | 7 days, last 10 runs                       |
+| filer    | `decisions`            | 7 days, last 10 runs                       |
+
+`file-ready` and `decisions` record what the filer's last `fileReady` and
+`decide` runs did to each letter: filed, held and why, a duplicate archived, or
+a decision refused.
 
 `swamp data gc` deletes what has expired; run it now and then, or from a
 scheduled workflow.

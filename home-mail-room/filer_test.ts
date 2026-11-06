@@ -425,3 +425,143 @@ Deno.test("decide leaves a letter that has already been filed alone", async () =
   await s.decide([{ letter: letter.id, action: "skip" }]);
   assertEquals(s.stored.get(letter.id), filed);
 });
+
+/** The letters in the record of what a filer run did. */
+function outcomes(s: Awaited<ReturnType<typeof setup>>, name: string) {
+  const run = s.stored.get(name)!;
+  return (run.letters as Record<string, unknown>[]).map((
+    { letter, originalName, outcome, by, destination, reasons },
+  ) => ({ letter, originalName, outcome, by, destination, reasons }));
+}
+
+Deno.test("fileReady records what happened to each letter in ReadyToFile", async () => {
+  const s = await setup();
+  const filed = await s.addLetter("a.pdf", {}, "one");
+  const held = await s.addLetter("b.pdf", { sender: "Nobody Ltd" }, "two");
+  await s.fileReady();
+  assertEquals(outcomes(s, "file-ready"), [
+    {
+      letter: filed.id,
+      originalName: "a.pdf",
+      outcome: "filed",
+      by: "filer",
+      destination: `${s.repoDir}/${BILL}`,
+      reasons: [],
+    },
+    {
+      letter: held.id,
+      originalName: "b.pdf",
+      outcome: "held",
+      by: "filer",
+      destination: null,
+      reasons: ['No FileCabinet folder for the sender "Nobody Ltd"'],
+    },
+  ]);
+});
+
+Deno.test("fileReady records the copies it archived and the records it dropped", async () => {
+  const s = await setup(["Thames Water"]);
+  const filed = await s.addLetter("a.pdf", {}, "one");
+  const gone = await s.addLetter("b.pdf", { sender: "Nobody Ltd" }, "two");
+  await s.fileReady();
+  await Deno.writeFile(
+    `${s.repoDir}/Inbound/ReadyToFile/copy.pdf`,
+    filed.bytes,
+  );
+  await Deno.remove(gone.path);
+  await s.fileReady();
+  assertEquals(
+    outcomes(s, "file-ready").map(({ letter, originalName, outcome }) => ({
+      letter,
+      originalName,
+      outcome,
+    })),
+    [
+      { letter: filed.id, originalName: "copy.pdf", outcome: "duplicate" },
+      { letter: gone.id, originalName: "b.pdf", outcome: "dropped" },
+    ],
+  );
+});
+
+Deno.test("fileReady records a letter waiting on a person's decision", async () => {
+  const s = await setup([]);
+  const letter = await s.addLetter("a.pdf");
+  await s.fileReady();
+  s.stored.set(letter.id, {
+    ...s.stored.get(letter.id)!,
+    reasons: ["Another file is already there"],
+    decision: { action: "file" },
+  });
+  await s.fileReady();
+  assertEquals(outcomes(s, "file-ready"), [{
+    letter: letter.id,
+    originalName: "a.pdf",
+    outcome: "waiting",
+    by: "person",
+    destination: null,
+    reasons: ["Another file is already there"],
+  }]);
+});
+
+Deno.test("fileReady records a run that found nothing to file", async () => {
+  const s = await setup();
+  await s.fileReady();
+  assertEquals(outcomes(s, "file-ready"), []);
+});
+
+Deno.test("decide records each decision's outcome, refusing ones it cannot apply", async () => {
+  const s = await setup([]);
+  const a = await s.addLetter("a.pdf", {}, "one");
+  const b = await s.addLetter("b.pdf", {}, "two");
+  const c = await s.addLetter("c.pdf", {}, "three");
+  await s.fileReady();
+  await s.decide([{ letter: c.id, action: "skip" }]);
+  await s.decide([
+    { letter: a.id, action: "file", date: "2023-02-30" },
+    { letter: b.id, action: "file", sender: "Thames Water" },
+    { letter: c.id, action: "skip" },
+    { letter: "letter-0000000000000000", action: "skip" },
+  ]);
+  assertEquals(outcomes(s, "decisions"), [
+    {
+      letter: a.id,
+      originalName: "a.pdf",
+      outcome: "held",
+      by: "person",
+      destination: null,
+      reasons: ["The date must be a real date, YYYY-MM-DD"],
+    },
+    {
+      letter: b.id,
+      originalName: "b.pdf",
+      outcome: "filed",
+      by: "person",
+      destination: `${s.repoDir}/${BILL}`,
+      reasons: [],
+    },
+    {
+      letter: c.id,
+      originalName: "c.pdf",
+      outcome: "refused",
+      by: "person",
+      destination: null,
+      reasons: ["Already skipped"],
+    },
+    {
+      letter: "letter-0000000000000000",
+      originalName: "",
+      outcome: "refused",
+      by: "person",
+      destination: null,
+      reasons: ["No such letter"],
+    },
+  ]);
+});
+
+Deno.test("decide records a skipped letter", async () => {
+  const s = await setup([]);
+  const letter = await s.addLetter("a.pdf");
+  await s.fileReady();
+  await s.decide([{ letter: letter.id, action: "skip" }]);
+  assertEquals(outcomes(s, "decisions").map((o) => o.outcome), ["skipped"]);
+});

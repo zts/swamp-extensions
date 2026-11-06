@@ -103,6 +103,52 @@ const LetterSchema = z.object({
 type Letter = z.infer<typeof LetterSchema>;
 type Proposal = z.infer<typeof ProposalSchema>;
 
+const OUTCOMES = [
+  ...STATES,
+  "duplicate",
+  "waiting",
+  "dropped",
+  "refused",
+] as const;
+
+/** What one fileReady or decide run did to each letter it looked at. */
+export const RunSchema = z.object({
+  method: z.enum(["fileReady", "decide"]),
+  letters: z.array(z.object({
+    letter: z.string(),
+    originalName: z.string().describe("The file's name in ReadyToFile"),
+    outcome: z.enum(OUTCOMES).describe(
+      "The letter's state after the run; duplicate: a copy of a filed " +
+        "letter, moved to Archived; waiting: a person's decision that " +
+        "could not be applied; dropped: its file left ReadyToFile without " +
+        "a decision; refused: a decision for a letter that was not open",
+    ),
+    by: z.enum(["filer", "person"]).describe("Who decided what to do"),
+    destination: z.string().nullable().describe(
+      "The cabinet file it was filed as, is a copy of, or conflicts with",
+    ),
+    reasons: z.array(z.string()).describe("Why it is held or was refused"),
+  })),
+  finishedAt: z.string(),
+});
+
+export type Run = z.infer<typeof RunSchema>;
+type Outcome = Run["letters"][number];
+
+/** A letter's outcome, from its state after the run. */
+function outcomeOf(letter: Letter, by: Outcome["by"]): Outcome {
+  return {
+    letter: letterId(letter.contentHash),
+    originalName: letter.originalName,
+    outcome: letter.state,
+    by,
+    destination: letter.state === "filed" || letter.state === "conflict"
+      ? letter.destination ?? null
+      : null,
+    reasons: letter.reasons,
+  };
+}
+
 interface DataHandle {
   name: string;
   specName?: string;
@@ -404,6 +450,13 @@ export const behavior = {
       lifetime: "infinite",
       garbageCollection: 20,
     },
+    "run": {
+      description:
+        "What one fileReady (file-ready) or decide (decisions) run did to each letter",
+      schema: RunSchema,
+      lifetime: "7d",
+      garbageCollection: 10,
+    },
   },
   files: {
     "header": {
@@ -429,8 +482,7 @@ export const behavior = {
         );
         const scanned = await scans(context, g.scanner, ready);
         const handles: DataHandle[] = [];
-        const counts: Record<string, number> = {};
-        const count = (what: string) => counts[what] = (counts[what] ?? 0) + 1;
+        const outcomes: Outcome[] = [];
         const seen = new Set<string>();
 
         for (const pdf of ready) {
@@ -440,7 +492,10 @@ export const behavior = {
           const existing = stored ? LetterSchema.parse(stored) : null;
           // A person's decision that could not be applied waits for them.
           if (existing && OPEN.has(existing.state) && existing.decision) {
-            count("waiting");
+            outcomes.push({
+              ...outcomeOf(existing, "person"),
+              outcome: "waiting",
+            });
             continue;
           }
           // A copy of a letter already in the cabinet: only the original
@@ -450,7 +505,11 @@ export const behavior = {
             await fileHash(existing.destination) === pdf.hash
           ) {
             await moveInto(folder(inbound, "archived"), pdf.path, pdf.hash);
-            count("copies archived");
+            outcomes.push({
+              ...outcomeOf(existing, "filer"),
+              originalName: pdf.path.slice(pdf.path.lastIndexOf("/") + 1),
+              outcome: "duplicate",
+            });
             continue;
           }
 
@@ -492,7 +551,7 @@ export const behavior = {
             );
           }
           handles.push(...await save(context, g, letter, header));
-          count(letter.state);
+          outcomes.push(outcomeOf(letter, "filer"));
         }
 
         // A letter waiting for a person whose file has left ReadyToFile is
@@ -506,12 +565,27 @@ export const behavior = {
             "{letter} left ReadyToFile without a decision; dropped its record",
             { letter: id },
           );
-          count("dropped");
+          outcomes.push({
+            ...outcomeOf(letter, "filer"),
+            outcome: "dropped",
+            reasons: ["Its file left ReadyToFile without a decision"],
+          });
         }
 
+        const counts: Record<string, number> = {};
+        for (const o of outcomes) {
+          counts[o.outcome] = (counts[o.outcome] ?? 0) + 1;
+        }
         context.logger.info("Letters in ReadyToFile: {counts}", {
           counts: JSON.stringify(counts),
         });
+        handles.push(
+          await context.writeResource("run", "file-ready", {
+            method: "fileReady",
+            letters: outcomes,
+            finishedAt: new Date().toISOString(),
+          }),
+        );
         return { dataHandles: handles };
       },
     },
@@ -527,10 +601,21 @@ export const behavior = {
         const g = GlobalArgsSchema.parse(context.globalArgs);
         const inbound = resolve(context.repoDir, g.inboundDir);
         const handles: DataHandle[] = [];
+        const outcomes: Outcome[] = [];
+        const refuse = (letter: string, originalName: string, reason: string) =>
+          outcomes.push({
+            letter,
+            originalName,
+            outcome: "refused",
+            by: "person",
+            destination: null,
+            reasons: [reason],
+          });
         for (const d of decisions) {
           const stored = await context.readResource(d.letter);
           if (!stored) {
             context.logger.warning("No letter {letter}", { letter: d.letter });
+            refuse(d.letter, "", "No such letter");
             continue;
           }
           const letter = LetterSchema.parse(stored);
@@ -539,6 +624,7 @@ export const behavior = {
               letter: d.letter,
               state: letter.state,
             });
+            refuse(d.letter, letter.originalName, `Already ${letter.state}`);
             continue;
           }
           const { letter: _id, action, overwrite, ...overrides } = d;
@@ -574,7 +660,15 @@ export const behavior = {
             return fileLetter(inbound, decided, fields as Proposal, overwrite);
           });
           handles.push(...await save(context, g, after));
+          outcomes.push(outcomeOf(after, "person"));
         }
+        handles.push(
+          await context.writeResource("run", "decisions", {
+            method: "decide",
+            letters: outcomes,
+            finishedAt: new Date().toISOString(),
+          }),
+        );
         return { dataHandles: handles };
       },
     },
