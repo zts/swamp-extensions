@@ -399,6 +399,24 @@ Deno.test("scanBatch names each letter it did not read again, and when it was re
   });
 });
 
+Deno.test("scanBatch removes a scratch dir a killed batch left over a day ago, and no newer one", async () => {
+  const stale = await Deno.makeTempDir({ prefix: "home-mail-room-scan-" });
+  const recent = await Deno.makeTempDir({ prefix: "home-mail-room-scan-" });
+  const longAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  await Deno.utime(stale, longAgo, longAgo);
+  try {
+    await withRepo(async (repoDir) => {
+      await Deno.writeFile(incoming(repoDir, "a.pdf"), SAMPLE);
+      await scan(repoDir);
+    });
+    assertEquals(await exists(stale), false);
+    assertEquals(await exists(recent), true);
+  } finally {
+    await Deno.remove(stale, { recursive: true }).catch(() => {});
+    await Deno.remove(recent, { recursive: true });
+  }
+});
+
 Deno.test("scanBatch reads two copies of a letter once and moves both", async () => {
   await withRepo(async (repoDir) => {
     await Deno.writeFile(incoming(repoDir, "a.pdf"), SAMPLE);

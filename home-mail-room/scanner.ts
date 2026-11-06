@@ -44,6 +44,12 @@ export const DEFAULT_PROMPT =
 
 const NAME = /^[A-Za-z0-9_-]+$/;
 
+/** Prefix of the temp dir a batch renders its images into. */
+const SCRATCH = "home-mail-room-scan-";
+
+/** Older than this, a batch's temp dir was left by a batch that was killed. */
+const STALE_MS = 24 * 60 * 60 * 1000;
+
 const GlobalArgsSchema = z.object({
   inboundDir: z.string().min(1).default("Inbound").describe(
     "Folder holding Incoming, ReadyToFile and Failed; absolute, or relative to the repository",
@@ -410,6 +416,28 @@ async function extract(
   return out;
 }
 
+/**
+ * A new temp dir for a batch's images. A batch removes its own when it ends,
+ * but not when its process is killed, so any left over a day ago go first.
+ */
+async function scratchDir(): Promise<string> {
+  const dir = await Deno.makeTempDir({ prefix: SCRATCH });
+  const parent = dir.slice(0, dir.lastIndexOf("/"));
+  try {
+    for await (const entry of Deno.readDir(parent)) {
+      if (!entry.isDirectory || !entry.name.startsWith(SCRATCH)) continue;
+      const path = `${parent}/${entry.name}`;
+      const mtime = path === dir ? null : (await Deno.stat(path)).mtime;
+      if (mtime && Date.now() - mtime.getTime() > STALE_MS) {
+        await Deno.remove(path, { recursive: true });
+      }
+    }
+  } catch {
+    // Clearing up after another batch must not stop this one.
+  }
+  return dir;
+}
+
 /** The details record of a letter the model read. */
 function detailsFrom(
   pdf: { path: string; hash: string },
@@ -598,7 +626,7 @@ export const behavior = {
           byHash.set(hash, [...(byHash.get(hash) ?? []), o]);
         }
 
-        const tmpDir = await Deno.makeTempDir({ prefix: "home-mail-room-" });
+        const tmpDir = await scratchDir();
         const extracted: Extracted[] = [];
         /** Why a letter could not be rendered: it is no readable PDF. */
         const unrenderable = new Map<string, string>();

@@ -116,6 +116,10 @@ old details, from whenever it was read: the log and the run-summary name each
 one and when it was read. To read one again, delete its `details-<short hash>`
 first.
 
+A batch renders its images into a `home-mail-room-scan-*` folder in the system
+temp folder and removes it when it ends. A batch whose process is killed cannot,
+so the next batch removes any such folder over a day old.
+
 The filer then reviews each letter in `ReadyToFile`. It files a letter whose
 sender matches a cabinet folder and whose date and document type were read:
 
