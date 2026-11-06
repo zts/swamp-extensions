@@ -20,33 +20,57 @@ export interface UvSettings {
 export interface RunOptions {
   /** Keep uv and Hugging Face off the network. */
   offline: boolean;
-  /** Given the helper's stderr, if any, whether the run succeeds or fails. */
-  onStderr?: (stderr: string) => void;
+  /** Given each line the helper writes to stderr, as it writes it. */
+  onStderr?: (line: string) => void;
 }
 
 const decoder = new TextDecoder();
+
+/** All of a stream's text, handing on each non-blank line as it arrives. */
+async function readLines(
+  stream: ReadableStream<Uint8Array>,
+  onLine?: (line: string) => void,
+): Promise<string> {
+  let text = "";
+  let pending = "";
+  for await (const chunk of stream.pipeThrough(new TextDecoderStream())) {
+    text += chunk;
+    const lines = (pending + chunk).split("\n");
+    pending = lines.pop()!;
+    for (const line of lines) if (line.trim()) onLine?.(line.trimEnd());
+  }
+  if (pending.trim()) onLine?.(pending.trimEnd());
+  return text;
+}
 
 async function uv(
   settings: UvSettings,
   args: string[],
   env: Record<string, string> = {},
+  onStderr?: (line: string) => void,
 ) {
   try {
     // uv runs the Python helper, the way this behavior runs the model outside
     // Deno; its argv is built from validated arguments and carries no secret.
     // swamp-quality-ignore deno-command
-    const output = await new Deno.Command(settings.uvPath, {
+    const child = new Deno.Command(settings.uvPath, {
       args,
       env,
       stdin: "null",
       stdout: "piped",
       stderr: "piped",
       signal: settings.signal,
-    }).output();
+    }).spawn();
+    // stderr carries the helper's progress, so it is handed on as it comes.
+    const [status, stdout, stderr] = await Promise.all([
+      child.status,
+      new Response(child.stdout).arrayBuffer(),
+      readLines(child.stderr, onStderr),
+    ]);
     return {
-      code: output.code,
-      stdout: decoder.decode(output.stdout),
-      stderr: decoder.decode(output.stderr),
+      code: status.code,
+      stdout: decoder.decode(stdout),
+      stderr,
     };
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) {
@@ -102,16 +126,20 @@ async function uvRun(
   const env: Record<string, string> = {};
   if (settings.hfHome) env.HF_HOME = settings.hfHome;
   if (offline) env.HF_HUB_OFFLINE = "1";
-  const run = await uv(settings, [
-    "run",
-    "--quiet",
-    "--locked",
-    ...(offline ? ["--offline"] : []),
-    "--script",
-    script,
-    ...args,
-  ], env);
-  if (run.stderr.trim()) onStderr?.(run.stderr.trim());
+  const run = await uv(
+    settings,
+    [
+      "run",
+      "--quiet",
+      "--locked",
+      ...(offline ? ["--offline"] : []),
+      "--script",
+      script,
+      ...args,
+    ],
+    env,
+    onStderr,
+  );
   return run;
 }
 

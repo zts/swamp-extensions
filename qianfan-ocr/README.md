@@ -113,8 +113,8 @@ wrote; anything else is not this batch's result.
   stops the helper and releases the model lock; the images already read keep
   their `ocr` records, the rest are `notRun` on the batch record, and the run
   ends cancelled.
-- **Progress arrives at the end.** The helper logs "item i of n" as it goes, but
-  swamp shows the helper's output only once the batch has finished.
+- **Progress shows as it goes.** Each line the helper writes to stderr, such as
+  "item i of n", is logged as soon as it is written.
 - **A batch holds the model for its whole run.** Other runs of `extract` or
   `extractBatch` on this machine wait until it ends, however long it is.
 - Two images must not share a record name: give one a `name`, or the batch fails

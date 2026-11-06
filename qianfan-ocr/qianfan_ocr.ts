@@ -166,8 +166,7 @@ function uvSettings(context: Context): UvSettings {
 }
 
 function logHelper(context: Context) {
-  return (stderr: string) =>
-    context.logger.info("helper: {stderr}", { stderr });
+  return (line: string) => context.logger.info("helper: {line}", { line });
 }
 
 /**

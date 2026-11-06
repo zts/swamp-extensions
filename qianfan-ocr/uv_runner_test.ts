@@ -5,7 +5,12 @@ import {
   assertStringIncludes,
 } from "jsr:@std/assert@1.0.19";
 import { fakeUvCalls, makeFakeUv } from "./testdata/fake_uv_shim.ts";
-import { environmentExists, runHelper, runHelperLines } from "./uv_runner.ts";
+import {
+  environmentExists,
+  runHelper,
+  runHelperLines,
+  STARTED,
+} from "./uv_runner.ts";
 
 const SCRIPT = "/ext/helper/qianfan_ocr.py";
 
@@ -50,6 +55,39 @@ Deno.test("runHelper returns the helper's JSON and hands on its stderr", async (
     );
     assertEquals(result, { rawOutput: "hi" });
     assertStringIncludes(seen.join(""), "loading model");
+  });
+});
+
+Deno.test("runHelper hands on each stderr line while the helper is still running", async () => {
+  await withFakeUv({ FAKE_UV_RUN: "hang" }, async (fake) => {
+    const controller = new AbortController();
+    // Stops the hang if no line arrives before it ends.
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 5_000);
+    const seen: string[] = [];
+    try {
+      await assertRejects(() =>
+        runHelper(
+          { uvPath: fake.uvPath, signal: controller.signal },
+          SCRIPT,
+          ["extract"],
+          {
+            offline: true,
+            onStderr: (line) => {
+              seen.push(line);
+              controller.abort();
+            },
+          },
+        )
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+    assertEquals(seen, [STARTED]);
+    assertEquals(timedOut, false);
   });
 });
 
