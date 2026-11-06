@@ -17,6 +17,8 @@ behaviors:
   - scanner.ts
   - filer.ts
   - review.ts
+reports:
+  - run_report.ts
 workflows:
   - workflows/process-incoming.yaml
 # Bare name: a pinned version installs exactly that one, and an installed

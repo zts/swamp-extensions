@@ -10,6 +10,10 @@ description: >-
   holds the rest for the review page. Uses the behaviors named scanner and
   filer; needs an installed @zts/qianfan-ocr (see the extension's README).
 tags: {}
+# Sums up what the run did with each letter at the end of the run.
+reports:
+  require:
+    - "@zts/home-mail-room/run-summary"
 inputs:
   type: object
   properties:

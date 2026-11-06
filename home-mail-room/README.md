@@ -126,6 +126,18 @@ destination is taken is held as a conflict. Everything it cannot file is held
 for you, in `ReadyToFile`, with the reasons. Dates are read day first, as UK
 post writes them.
 
+At the end of the run, the `@zts/home-mail-room/run-summary` report shows what
+happened to each letter: read, read before, sent to `Failed` or left in
+`Incoming`, then filed, held for review and why, or archived as a copy of a
+letter already filed. To see it again later:
+
+```sh
+swamp report get @zts/home-mail-room/run-summary \
+  --workflow @zts/home-mail-room/process-incoming
+```
+
+Swamp keeps the last five runs' reports, for 30 days.
+
 ## Reviewing held letters
 
 ```sh
