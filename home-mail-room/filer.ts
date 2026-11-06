@@ -288,13 +288,16 @@ async function letters(context: Context): Promise<Letter[]> {
 }
 
 /**
- * Save a letter's record. A filed or skipped letter's record, and its
- * header, are written to expire after the retention.
+ * Save a letter's record, and its header: the image given, or the one this
+ * filer holds once the letter is done. A filed or skipped letter's record
+ * and header are written to expire after the retention. Each is written
+ * once, as swamp allows only one write of a name per method run.
  */
 async function save(
   context: Context,
   g: Globals,
   letter: Letter,
+  header?: Uint8Array | null,
 ): Promise<DataHandle[]> {
   const done = letter.state === "filed" || letter.state === "skipped";
   const overrides = done ? { lifetime: g.retention } : undefined;
@@ -306,19 +309,18 @@ async function save(
       overrides,
     ),
   ];
-  if (done) {
-    const header = headerName(letter.contentHash);
-    const png = await context.dataRepository.getContent(
+  const name = headerName(letter.contentHash);
+  const png = header ?? (done
+    ? await context.dataRepository.getContent(
       context.modelType,
       context.modelId,
-      header,
+      name,
+    )
+    : null);
+  if (png) {
+    handles.push(
+      await context.createFileWriter("header", name, overrides).writeAll(png),
     );
-    if (png) {
-      handles.push(
-        await context.createFileWriter("header", header, overrides)
-          .writeAll(png),
-      );
-    }
   }
   return handles;
 }
@@ -465,19 +467,13 @@ export const behavior = {
               "Nothing was read off this letter; put it back in Incoming to read it",
             ],
           };
-          if (scan.header?.modelId && scan.header.modelType) {
-            const png = await context.dataRepository.getContent(
+          const header = scan.header?.modelId && scan.header.modelType
+            ? await context.dataRepository.getContent(
               scan.header.modelType,
               scan.header.modelId,
               scan.header.name,
-            );
-            if (png) {
-              handles.push(
-                await context.createFileWriter("header", headerName(pdf.hash))
-                  .writeAll(png),
-              );
-            }
-          }
+            )
+            : null;
           let letter: Letter = {
             state: "held",
             pdfPath: pdf.path,
@@ -495,7 +491,7 @@ export const behavior = {
               () => fileLetter(inbound, letter, proposal, false),
             );
           }
-          handles.push(...await save(context, g, letter));
+          handles.push(...await save(context, g, letter, header));
           count(letter.state);
         }
 

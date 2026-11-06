@@ -27,6 +27,14 @@ async function setup(folders: string[] = ["Thames Water"]) {
   const files = new Map<string, Uint8Array>();
   const scanner: ScannerRecord[] = [];
   const scannerFiles = new Map<string, Uint8Array>();
+  /** Names written in the current method run: swamp refuses a repeat. */
+  const thisRun = new Set<string>();
+  const once = (name: string) => {
+    if (thisRun.has(name)) {
+      throw new Error(`Duplicate data instance name '${name}'`);
+    }
+    thisRun.add(name);
+  };
 
   const context = {
     globalArgs: {},
@@ -41,6 +49,7 @@ async function setup(folders: string[] = ["Thames Water"]) {
       data: Record<string, unknown>,
       overrides?: { lifetime?: string },
     ) => {
+      once(name);
       stored.set(name, data);
       lifetimes.set(name, overrides?.lifetime ?? "spec");
       return Promise.resolve({ name, specName, version: 1 });
@@ -51,6 +60,7 @@ async function setup(folders: string[] = ["Thames Water"]) {
       overrides?: { lifetime?: string },
     ) => ({
       writeAll: (content: Uint8Array) => {
+        once(name);
         files.set(name, content);
         lifetimes.set(name, overrides?.lifetime ?? "spec");
         return Promise.resolve({ name, specName, version: 1 });
@@ -123,9 +133,14 @@ async function setup(folders: string[] = ["Thames Water"]) {
 
   // deno-lint-ignore no-explicit-any
   const methods = behavior.methods as any;
-  const fileReady = () => methods.fileReady.execute({}, context);
-  const decide = (decisions: Record<string, unknown>[]) =>
-    methods.decide.execute({ decisions }, context);
+  const fileReady = () => {
+    thisRun.clear();
+    return methods.fileReady.execute({}, context);
+  };
+  const decide = (decisions: Record<string, unknown>[]) => {
+    thisRun.clear();
+    return methods.decide.execute({ decisions }, context);
+  };
 
   return {
     repoDir,
