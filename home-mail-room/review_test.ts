@@ -1,9 +1,12 @@
 import { assertEquals } from "jsr:@std/assert@1.0.19";
-import { handler } from "./review.ts";
+import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20261023.61";
+import { behavior, handler } from "./review.ts";
 import { PAGE_HTML } from "./review_page.ts";
 import { type Decision, type Letter, Store } from "./review_store.ts";
 
 const NAME = "letter-0123456789abcdef";
+const PORT = 8787;
+const BASE = `http://127.0.0.1:${PORT}`;
 
 function held(over: Partial<Letter> = {}): Letter {
   return {
@@ -36,12 +39,18 @@ async function setup(letters: Letter[]) {
   const handle = handler(store, new Map(), (names, sender) => {
     renamed.push([names, sender]);
     return Promise.resolve();
-  });
-  const get = (path: string) => handle(new Request(`http://x${path}`));
-  const post = (path: string, body: unknown) =>
+  }, () => PORT);
+  const get = (path: string, base = BASE) =>
+    handle(new Request(`${base}${path}`));
+  const post = (
+    path: string,
+    body: unknown,
+    headers: Record<string, string> = { "content-type": "application/json" },
+  ) =>
     handle(
-      new Request(`http://x${path}`, {
+      new Request(`${BASE}${path}`, {
         method: "POST",
+        headers,
         body: JSON.stringify(body),
       }),
     );
@@ -79,8 +88,9 @@ Deno.test("preview gives no path for a date that is not real", async () => {
 Deno.test("a decision posted for a letter reaches the filer as skip", async () => {
   const { handle, store, sent } = await setup([held()]);
   const res = await handle(
-    new Request(`http://x/api/letters/${NAME}/decide`, {
+    new Request(`${BASE}/api/letters/${NAME}/decide`, {
       method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "skip" }),
     }),
   );
@@ -121,4 +131,79 @@ Deno.test("rename refuses an empty name without asking the filer", async () => {
   const res = await post("/api/rename", { names: [NAME], sender: " " });
   assertEquals(res.status, 422);
   assertEquals(renamed, []);
+});
+
+Deno.test("the page answers at its own port on 127.0.0.1 and localhost", async () => {
+  const { get } = await setup([held()]);
+  assertEquals((await get("/")).status, 200);
+  assertEquals(
+    (await get("/api/letters", `http://localhost:${PORT}`)).status,
+    200,
+  );
+});
+
+Deno.test("a request for another host is refused, as DNS rebinding sends", async () => {
+  const { get } = await setup([held()]);
+  for (const base of [`http://evil.example:${PORT}`, "http://127.0.0.1:9999"]) {
+    const res = await get("/api/letters", base);
+    assertEquals(res.status, 403, base);
+    assertEquals(JSON.stringify(await res.json()).includes("Thames"), false);
+  }
+});
+
+Deno.test("a POST from another origin is refused before it reaches the filer", async () => {
+  const { post, renamed } = await setup([held()]);
+  for (
+    const origin of ["http://evil.example", "null", `https://127.0.0.1:${PORT}`]
+  ) {
+    const res = await post(
+      "/api/rename",
+      { names: [NAME], sender: "Mallory" },
+      {
+        "content-type": "application/json",
+        origin,
+      },
+    );
+    assertEquals(res.status, 403, origin);
+  }
+  assertEquals(renamed, []);
+});
+
+Deno.test("a POST from the page's own origin is accepted", async () => {
+  const { post, renamed } = await setup([held()]);
+  const res = await post("/api/rename", { names: [NAME], sender: "Thames" }, {
+    "content-type": "application/json",
+    origin: `http://localhost:${PORT}`,
+  });
+  assertEquals(res.status, 200);
+  assertEquals(renamed, [[[NAME], "Thames"]]);
+});
+
+Deno.test("serve on port 0 answers the page at the port it was given", async () => {
+  const test = createModelTestContext({ globalArgs: {}, methodName: "serve" });
+  const stop = new AbortController();
+  let bound = 0;
+  const listening = Promise.withResolvers<void>();
+  const context = {
+    ...test.context,
+    signal: stop.signal,
+    queryData: () => Promise.resolve([]),
+    dataRepository: { getContent: () => Promise.resolve(null) },
+    logger: {
+      ...test.context.logger,
+      info: (_message: string, props?: Record<string, unknown>) => {
+        if (typeof props?.port === "number") bound = props.port;
+        listening.resolve();
+      },
+    },
+  };
+  const served = behavior.methods.serve.execute({ port: 0 }, context);
+  try {
+    await listening.promise;
+    const res = await fetch(`http://127.0.0.1:${bound}/api/letters`);
+    assertEquals([res.status, await res.json()], [200, []]);
+  } finally {
+    stop.abort();
+    await served;
+  }
 });

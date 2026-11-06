@@ -95,13 +95,40 @@ async function pdf(paths: unknown[]): Promise<Response> {
 }
 
 /**
+ * Why a request is refused, or null for one from the page itself. Binding
+ * to 127.0.0.1 keeps other machines out but not other web pages open in
+ * the person's browser: DNS rebinding sends their requests here with
+ * their own Host, and a cross-origin POST carries their Origin.
+ */
+function foreign(req: Request, port: number): string | null {
+  const ours = (url: URL) =>
+    (url.hostname === "127.0.0.1" || url.hostname === "localhost") &&
+    (url.port || "80") === String(port);
+  // Deno.serve builds req.url from the Host header.
+  if (!ours(new URL(req.url))) {
+    return "This page answers only at its own address";
+  }
+  const origin = req.headers.get("origin");
+  if (req.method === "POST" && origin !== null) {
+    // "null", and an origin that is not a URL, are not the page's.
+    const from = URL.canParse(origin) ? new URL(origin) : null;
+    if (from?.protocol !== "http:" || !ours(from)) {
+      return "Only the review page may change letters";
+    }
+  }
+  return null;
+}
+
+/**
  * The page's requests, answered from the store and the header images. A
- * rename goes to the filer once the decisions before it have.
+ * rename goes to the filer once the decisions before it have. port is the
+ * one the server listens on, which is known only once it does.
  */
 export function handler(
   store: Store,
   headers: Map<string, Uint8Array<ArrayBuffer>>,
   rename: (names: string[], sender: string) => Promise<void>,
+  port: () => number,
 ): (req: Request) => Promise<Response> {
   const sorted = () =>
     store.letters().sort((a, b) =>
@@ -109,6 +136,8 @@ export function handler(
     );
 
   return async (req) => {
+    const refused = foreign(req, port());
+    if (refused) return json({ error: refused }, 403);
     const url = new URL(req.url);
     const parts = url.pathname.split("/").filter(Boolean);
 
@@ -321,8 +350,9 @@ export const behavior = {
           );
         }, REFRESH_MS);
 
-        const handle = handler(store, headers, rename);
-        const server = Deno.serve({
+        // The port asked for may be 0, so the page's own is the one bound.
+        const handle = handler(store, headers, rename, () => server.addr.port);
+        const server: Deno.HttpServer<Deno.NetAddr> = Deno.serve({
           hostname: "127.0.0.1",
           port,
           signal: stop.signal,
