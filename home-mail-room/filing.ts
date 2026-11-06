@@ -89,21 +89,53 @@ export function filenameProblem(name: string): string | null {
   return null;
 }
 
+/** Articles, short prepositions and conjunctions, lower case in title case. */
+const MINOR_WORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "and",
+  "but",
+  "or",
+  "nor",
+  "as",
+  "at",
+  "by",
+  "for",
+  "in",
+  "of",
+  "on",
+  "to",
+  "via",
+]);
+
+/** Initials that have vowels, so are not told apart by having none. */
+const INITIALS = new Set(["UK", "USA"]);
+
 /**
  * A sender as it should be written. OCR copies letterheads set in capitals,
- * so a sender read all in capitals is title-cased, as is one all in lower
- * case. Capitals of under five letters are kept, as likely initials (HMRC,
- * EDF), and so is mixed case, which is taken to be how the sender writes it.
+ * so a sender read all in capitals is put in title case, as is one all in
+ * lower case. A sender in capitals of under five letters is kept, as likely
+ * initials (HMRC, EDF), and so is mixed case, which is taken to be how the
+ * sender writes it. Within a sender in capitals, a word with no vowels
+ * (HSBC, BT, PLC) and UK and USA stay in capitals.
  */
 export function senderName(raw: string): string {
   const upper = raw.match(/\p{Lu}/gu)?.length ?? 0;
   const lower = raw.match(/\p{Ll}/gu)?.length ?? 0;
   if (upper > 0 && lower > 0) return raw;
   if (lower === 0 && upper < 5) return raw;
-  return raw.toLowerCase().replace(
-    /(^|[\s\-/(&])(\p{Ll})/gu,
-    (_, before: string, letter: string) => before + letter.toUpperCase(),
-  );
+  let first = true;
+  return raw.replace(/[\p{L}\p{N}'’]+/gu, (word) => {
+    const isFirst = first;
+    first = false;
+    if (upper > 0 && (INITIALS.has(word) || !/[AEIOUY]/i.test(word))) {
+      return word;
+    }
+    const w = word.toLowerCase();
+    if (!isFirst && MINOR_WORDS.has(w)) return w;
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  });
 }
 
 /** Key a sender is compared by: cleaned, case and spacing ignored. */

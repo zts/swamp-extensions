@@ -139,9 +139,13 @@ for you, in `ReadyToFile`, with the reasons. Dates are read day first, as UK
 post writes them.
 
 A sender matches a folder whatever its case or spacing. The sender proposed for
-a held letter is title-cased when it was read all in capitals (five letters or
-more, so initials such as HMRC stay) or all in lower case; mixed case is kept as
-read. `LONDON BOROUGH OF HACKNEY` is proposed as `London Borough Of Hackney`.
+a held letter is put in title case when it was read all in capitals (five
+letters or more, so HMRC stays) or all in lower case: each word capitalised,
+except articles and short prepositions and conjunctions after the first. In a
+sender read in capitals, words with no vowels (HSBC, BT, PLC) and UK and USA are
+taken as initials and stay in capitals. Mixed case is kept as read.
+`HSBC UK BANK PLC` is proposed as `HSBC UK Bank PLC`, and
+`LONDON BOROUGH OF HACKNEY` as `London Borough of Hackney`.
 
 At the end of the run, the `@zts/home-mail-room/run-summary` report shows what
 happened to each letter: read, read before, sent to `Failed` or left in

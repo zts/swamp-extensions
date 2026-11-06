@@ -85,12 +85,29 @@ Deno.test("matchSender finds the cabinet folder whatever the case or spacing", (
 
 Deno.test("senderName title-cases a sender read all in capitals or all in lower case", () => {
   const cases: [string, string][] = [
-    ["LONDON BOROUGH OF HACKNEY", "London Borough Of Hackney"],
+    ["LONDON BOROUGH OF HACKNEY", "London Borough of Hackney"],
+    ["THE POST OFFICE", "The Post Office"],
     ["BLACK KATZ N1 LETTINGS & PROPERTY", "Black Katz N1 Lettings & Property"],
     ["ROYAL-MAIL", "Royal-Mail"],
+    ["SAINSBURY'S BANK", "Sainsbury's Bank"],
     ["thames water", "Thames Water"],
+    ["the bank of england", "The Bank of England"],
     ["bt", "Bt"],
     ["andrews & arnold ltd.", "Andrews & Arnold Ltd."],
+  ];
+  for (const [raw, want] of cases) assertEquals(senderName(raw), want, raw);
+});
+
+Deno.test("senderName keeps initials in capitals: words with no vowels, and UK and USA", () => {
+  const cases: [string, string][] = [
+    ["HSBC UK BANK PLC", "HSBC UK Bank PLC"],
+    ["BT GROUP PLC", "BT Group PLC"],
+    ["BANK OF AMERICA USA", "Bank of America USA"],
+    ["ACME LTD", "Acme LTD"],
+    // Initials with a vowel cannot be told from a word.
+    ["EDF ENERGY", "Edf Energy"],
+    ["ROYAL MAIL", "Royal Mail"],
+    ["BRITISH GAS", "British Gas"],
   ];
   for (const [raw, want] of cases) assertEquals(senderName(raw), want, raw);
 });
