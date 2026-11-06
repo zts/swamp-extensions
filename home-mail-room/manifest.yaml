@@ -1,0 +1,39 @@
+manifestVersion: 1
+name: "@zts/home-mail-room"
+version: "2026.11.06.1"
+license: MIT
+repository: https://github.com/zts/swamp-extensions
+description: >-
+  File scanned post. Scanned letters (PDFs) dropped into Inbound/Incoming are
+  read on this machine by an installed @zts/qianfan-ocr behavior, in batches,
+  and filed into a FileCabinet of sender folders. The scanner reads letters
+  and moves them to ReadyToFile, or to Failed when they cannot be read; the
+  filer files every letter it can on its own and holds the rest for a
+  person; the review behavior serves a local page where a person files or
+  skips the held letters. The process-incoming workflow runs it all.
+paths:
+  base: manifest
+behaviors:
+  - scanner.ts
+  - filer.ts
+  - review.ts
+workflows:
+  - workflows/process-incoming.yaml
+# Bare name: a pinned version installs exactly that one, and an installed
+# older one is kept either way. The scanner needs extractBatch.
+dependencies:
+  - "@zts/qianfan-ocr"
+additionalFiles:
+  - README.md
+  - LICENSE.txt
+platforms:
+  - darwin-aarch64
+  - linux-x86_64
+  - linux-aarch64
+labels:
+  - ocr
+  - pdf
+  - mail
+  - letters
+  - filing
+  - local-model
