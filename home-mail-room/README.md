@@ -41,8 +41,12 @@ its file name, so:
 
 Everything `@zts/qianfan-ocr` needs: macOS on Apple silicon or Linux, uv, about
 10GB of disk for the model and about 10GB of memory to run it. The scanner needs
-`@zts/qianfan-ocr` 2026.11.03.1 or later, which has `extractBatch`. The review
-page needs `swamp` on the `PATH` of the process that runs it.
+`@zts/qianfan-ocr` 2026.11.03.1 or later, which has `extractBatch`. The
+dependency on it is deliberately not pinned: a pinned version installs exactly
+that one, and an older one already installed is kept either way, so check with
+`swamp extension list` and run `swamp extension update @zts/qianfan-ocr` if
+yours is older. The review page needs `swamp` on the `PATH` of the process that
+runs it.
 
 ## Setup
 
@@ -174,7 +178,13 @@ one the filer refuses comes back with its reason.
 
 The page is its own behavior so a review session never holds the filer, and it
 sends decisions through the swamp CLI because a method may call another behavior
-with `runModel` only 100 times per run.
+with `runModel` only 100 times per run. Each of those CLI runs loads swamp's
+extensions afresh, so a decision can take a few seconds to reach the filer.
+
+The page answers only at `127.0.0.1` or `localhost` on its own port, and takes
+changes only as JSON from that address, so another web page open in your browser
+cannot read your letters or file them. Reaching it by any other name or port,
+such as through a proxy, is refused.
 
 Every decision the page sends is a run of the filer's `decide`, and after every
 `decide` and `fileReady` the `@zts/home-mail-room/letters` report lists what
@@ -240,7 +250,7 @@ scheduled workflow.
 ## Developing
 
 ```sh
-deno test --allow-read --allow-write --allow-env
+deno test --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1
 ```
 
 The review page's source is `review/index.html`. Extensions ship only code and
