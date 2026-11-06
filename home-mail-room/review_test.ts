@@ -1,4 +1,4 @@
-import { assertEquals } from "jsr:@std/assert@1.0.19";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.19";
 import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20261023.61";
 import {
   behavior,
@@ -271,4 +271,35 @@ Deno.test("a person's text reaches the filer verbatim, as one literal input", as
   assertEquals(args.includes("--literal-inputs"), true);
   assertEquals(args.length, 8);
   assertEquals(JSON.parse(args[input + 1]), { letters: [NAME], sender });
+});
+
+Deno.test("a failed run gives the person swamp's own error message", async () => {
+  // What swamp behavior run --json writes when a method fails.
+  const stderr = new TextEncoder().encode(
+    "Loading extensions...\n" + JSON.stringify(
+      {
+        error: "The letter is no longer at /Inbound/ReadyToFile/a.pdf",
+        code: "method_execution_failed",
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  const swamp = fakeSwamp({ code: 1, stderr });
+  const error = await assertRejects(() =>
+    runFilerMethod("/repo", "filer", "decide", { decisions: [] }, swamp.run)
+  );
+  assertEquals(
+    (error as Error).message,
+    "The letter is no longer at /Inbound/ReadyToFile/a.pdf",
+  );
+});
+
+Deno.test("a failed run that wrote no JSON gives its last lines", async () => {
+  const stderr = new TextEncoder().encode("one\ntwo\nthree\nfour\n");
+  const swamp = fakeSwamp({ code: 2, stderr });
+  const error = await assertRejects(() =>
+    runFilerMethod("/repo", "filer", "decide", { decisions: [] }, swamp.run)
+  );
+  assertEquals((error as Error).message, "two three four");
 });

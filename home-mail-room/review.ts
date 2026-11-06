@@ -244,6 +244,8 @@ export function handler(
 function swampError(out: string): string {
   try {
     const parsed = JSON.parse(out.slice(out.indexOf("{")));
+    // swamp --json writes { "error": "<message>", "code": "..." }.
+    if (typeof parsed.error === "string") return parsed.error;
     return parsed.error?.message ?? parsed.message ?? out;
   } catch {
     return out.trim().split("\n").slice(-3).join(" ");
