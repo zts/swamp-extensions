@@ -2,4 +2,876 @@
 // change the page, then run deno run --allow-read=. --allow-write=. review/build.ts
 
 /** The review page. */
-export const PAGE_HTML = "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n    <title>Mail review</title>\n    <style>\n    :root {\n      --bg: #f6f5f2;\n      --panel: #ffffff;\n      --line: #e2e0da;\n      --text: #1d1c1a;\n      --muted: #6d6a63;\n      --accent: #2f5bd3;\n      --accent-text: #fff;\n      --warn-bg: #fff4d6;\n      --warn: #8a5a00;\n      --ok: #2e7d4f;\n      --bad: #b3261e;\n      --sel: #e8eefc;\n      --edited: #7a3fc4;\n    }\n    @media (prefers-color-scheme: dark) {\n      :root {\n        --bg: #161615;\n        --panel: #1f1f1d;\n        --line: #34332f;\n        --text: #ecebe7;\n        --muted: #9b988f;\n        --accent: #7d9cf0;\n        --accent-text: #10131c;\n        --warn-bg: #3a2f12;\n        --warn: #f0c96a;\n        --ok: #6cc592;\n        --bad: #f08a80;\n        --sel: #263150;\n        --edited: #c49cf5;\n      }\n    }\n    * {\n      box-sizing: border-box;\n    }\n    body {\n      margin: 0;\n      height: 100vh;\n      display: grid;\n      grid-template-columns: 280px 1fr 380px;\n      background: var(--bg);\n      color: var(--text);\n      font: 14px/1.4 -apple-system, system-ui, sans-serif;\n    }\n    aside,\n    main,\n    form {\n      min-height: 0;\n    }\n    aside {\n      border-right: 1px solid var(--line);\n      display: flex;\n      flex-direction: column;\n    }\n    aside header {\n      padding: 14px 14px 8px;\n    }\n    h1 {\n      font-size: 15px;\n      margin: 0 0 10px;\n    }\n    .tabs {\n      display: flex;\n      gap: 4px;\n    }\n    .tabs button {\n      flex: 1;\n      border: 1px solid var(--line);\n      background: var(--panel);\n      color: var(--muted);\n      padding: 5px;\n      border-radius: 6px;\n      cursor: pointer;\n    }\n    .tabs button[aria-pressed=\"true\"] {\n      color: var(--text);\n      border-color: var(--accent);\n    }\n    ul {\n      list-style: none;\n      margin: 0;\n      padding: 4px 8px;\n      overflow: auto;\n      flex: 1;\n    }\n    li {\n      padding: 8px 10px;\n      border-radius: 8px;\n      cursor: pointer;\n      margin-bottom: 2px;\n    }\n    li[aria-selected=\"true\"] {\n      background: var(--sel);\n    }\n    li .who {\n      font-weight: 600;\n    }\n    li .meta {\n      color: var(--muted);\n      font-size: 12px;\n      display: flex;\n      gap: 6px;\n      align-items: center;\n    }\n    .badge {\n      font-size: 11px;\n      padding: 0 6px;\n      border-radius: 9px;\n      font-weight: 600;\n    }\n    .badge.warn {\n      background: var(--warn-bg);\n      color: var(--warn);\n    }\n    .badge.filed {\n      color: var(--ok);\n    }\n    .badge.skipped {\n      color: var(--muted);\n    }\n    li.group {\n      cursor: default;\n      font-size: 14px;\n      font-weight: 600;\n      color: var(--text);\n      padding: 12px 10px 4px;\n      margin-top: 6px;\n      border-top: 1px solid var(--line);\n      border-radius: 0;\n      display: flex;\n      align-items: center;\n      gap: 8px;\n    }\n    li.group:first-child {\n      border-top: none;\n      margin-top: 0;\n    }\n    li.group .actions {\n      margin-left: auto;\n      display: flex;\n      gap: 6px;\n    }\n    li.group button {\n      font: inherit;\n      font-size: 12px;\n      font-weight: 500;\n      color: var(--accent);\n      background: none;\n      border: 1px solid var(--line);\n      border-radius: 6px;\n      padding: 1px 8px;\n      cursor: pointer;\n      white-space: nowrap;\n    }\n    aside footer {\n      padding: 10px 14px;\n      color: var(--muted);\n      font-size: 12px;\n      border-top: 1px solid var(--line);\n    }\n    kbd {\n      font: 11px ui-monospace, monospace;\n      border: 1px solid var(--line);\n      border-radius: 4px;\n      padding: 0 4px;\n    }\n\n    main {\n      display: flex;\n      flex-direction: column;\n    }\n    main nav {\n      display: flex;\n      gap: 4px;\n      padding: 8px;\n      border-bottom: 1px solid var(--line);\n      align-items: center;\n    }\n    main nav .file {\n      margin-left: auto;\n      color: var(--muted);\n      font-size: 12px;\n      overflow: hidden;\n      text-overflow: ellipsis;\n      white-space: nowrap;\n    }\n    .view {\n      flex: 1;\n      min-height: 0;\n    }\n    iframe {\n      width: 100%;\n      height: 100%;\n      border: 0;\n      background: #888;\n    }\n    .crop {\n      overflow: auto;\n      padding: 16px;\n      height: 100%;\n    }\n    .crop img {\n      max-width: 100%;\n      box-shadow: 0 1px 6px #0003;\n      background: #fff;\n    }\n    .empty {\n      display: grid;\n      place-items: center;\n      height: 100%;\n      color: var(--muted);\n    }\n\n    form {\n      border-left: 1px solid var(--line);\n      background: var(--panel);\n      display: flex;\n      flex-direction: column;\n      overflow: auto;\n      padding: 16px;\n      gap: 14px;\n    }\n    .warnings {\n      background: var(--warn-bg);\n      color: var(--warn);\n      border-radius: 8px;\n      padding: 8px 10px;\n    }\n    .warnings p {\n      margin: 0;\n    }\n    label {\n      display: block;\n      font-weight: 600;\n      font-size: 12px;\n      margin-bottom: 4px;\n    }\n    label .edited {\n      color: var(--edited);\n      font-weight: 500;\n      margin-left: 6px;\n    }\n    input,\n    select {\n      width: 100%;\n      padding: 7px 9px;\n      font: inherit;\n      color: var(--text);\n      background: var(--bg);\n      border: 1px solid var(--line);\n      border-radius: 6px;\n    }\n    input:focus,\n    select:focus {\n      outline: 2px solid var(--accent);\n      outline-offset: -1px;\n    }\n    .read {\n      color: var(--muted);\n      font-size: 12px;\n      margin-top: 3px;\n    }\n    .dest {\n      font: 12px ui-monospace, monospace;\n      background: var(--bg);\n      padding: 8px;\n      border-radius: 6px;\n      word-break: break-all;\n      border: 1px dashed var(--line);\n    }\n    .dest.none {\n      color: var(--muted);\n      font-family: inherit;\n    }\n    details summary {\n      cursor: pointer;\n      font-weight: 600;\n      font-size: 12px;\n    }\n    dl {\n      display: grid;\n      grid-template-columns: auto 1fr;\n      gap: 2px 10px;\n      margin: 8px 0 0;\n      font-size: 12px;\n    }\n    dt {\n      color: var(--muted);\n    }\n    dd {\n      margin: 0;\n      word-break: break-word;\n    }\n    .actions {\n      display: flex;\n      gap: 8px;\n      margin-top: auto;\n      padding-top: 8px;\n    }\n    .actions button {\n      padding: 9px 12px;\n      border-radius: 8px;\n      border: 1px solid var(--line);\n      background: var(--bg);\n      color: var(--text);\n      font: inherit;\n      cursor: pointer;\n    }\n    .actions .primary {\n      background: var(--accent);\n      color: var(--accent-text);\n      border-color: var(--accent);\n      flex: 1;\n      font-weight: 600;\n    }\n    button:disabled {\n      opacity: .5;\n      cursor: progress;\n    }\n    .done {\n      border-radius: 8px;\n      padding: 10px;\n      background: var(--bg);\n    }\n    .done.filed strong {\n      color: var(--ok);\n    }\n    .actions .danger {\n      background: var(--bad);\n      border-color: var(--bad);\n    }\n    .done.skipped strong {\n      color: var(--bad);\n    }\n    .error {\n      color: var(--bad);\n      white-space: pre-wrap;\n      font-size: 12px;\n    }\n    .toast {\n      position: fixed;\n      bottom: 16px;\n      left: 50%;\n      transform: translateX(-50%);\n      background: var(--text);\n      color: var(--bg);\n      padding: 8px 14px;\n      border-radius: 8px;\n      opacity: 0;\n      transition: opacity .2s;\n      pointer-events: none;\n    }\n    .toast.show {\n      opacity: 1;\n    }\n    .badge.saving {\n      color: var(--muted);\n    }\n    .badge.failed {\n      background: var(--bad);\n      color: var(--panel);\n    }\n    .reject-box {\n      display: flex;\n      gap: 8px;\n    }\n    .reject-box input {\n      flex: 1;\n    }\n    </style>\n  </head>\n  <body>\n    <aside>\n      <header>\n        <h1>Mail review</h1>\n        <div class=\"tabs\">\n          <button type=\"button\" data-filter=\"open\"\n            aria-pressed=\"true\">To review</button>\n          <button type=\"button\" data-filter=\"done\"\n            aria-pressed=\"false\">Done</button>\n        </div>\n      </header>\n      <ul id=\"queue\"></ul>\n      <footer><kbd>j</kbd>/<kbd>k</kbd> move · <kbd>⌘↵</kbd> file · <kbd>v</kbd> toggle view</footer>\n    </aside>\n    <main>\n      <nav>\n        <div class=\"tabs\" style=\"width:390px\">\n          <button type=\"button\" data-view=\"pdf\"\n            aria-pressed=\"true\">Letter</button>\n          <button type=\"button\" data-view=\"crop\"\n            aria-pressed=\"false\">What was read</button>\n          <button type=\"button\" data-view=\"existing\" id=\"existingTab\"\n            aria-pressed=\"false\" hidden>Existing file</button>\n        </div>\n        <span class=\"file\" id=\"docname\"></span>\n      </nav>\n      <div class=\"view\" id=\"view\">\n        <div class=\"empty\">Loading…</div>\n      </div>\n    </main>\n    <form id=\"form\" autocomplete=\"off\"></form>\n    <div class=\"toast\" id=\"toast\"></div>\n\n    <script>\n    const TYPES = [\"bill\", \"statement\", \"invoice\", \"reminder\", \"notice\", \"receipt\", \"other\"];\n    const FIELDS = [\"sender\", \"date\", \"documentType\", \"title\", \"filename\"];\n    /** States a reviewer can still decide a letter in. */\n    const OPEN = [\"held\", \"conflict\"];\n    const RETENTION_DAYS = 30;\n    let letters = [], filter = \"open\", selected = null;\n    let view = new URLSearchParams(location.search).get(\"view\") ?? stored(\"view\") ??\n      \"pdf\";\n    /** What the document pane and form show, so they are only rebuilt on change. */\n    let shownView = null, shownForm = null;\n\n    function stored(key, value) {\n      try {\n        if (value === undefined) return localStorage.getItem(key);\n        localStorage.setItem(key, value);\n      } catch {\n        return null;\n      }\n    }\n\n    const $ = (id) => document.getElementById(id);\n    const esc = (s) =>\n      String(s ?? \"\").replace(\n        /[&<>\"]/g,\n        (c) => ({ \"&\": \"&amp;\", \"<\": \"&lt;\", \">\": \"&gt;\", '\"': \"&quot;\" })[c],\n      );\n    const isOpen = (l) => OPEN.includes(l.state);\n    const senderOf = (l) => l.proposal?.sender || \"Unknown sender\";\n    /** The open queue, grouped by sender so a sender's letters can be filed together. */\n    const visible = () => {\n      const items = letters.filter((l) => isOpen(l) === (filter === \"open\"));\n      return filter === \"open\"\n        ? items.sort((a, b) => senderOf(a).localeCompare(senderOf(b)))\n        : items.sort((a, b) =>\n          String(b.updatedAt).localeCompare(String(a.updatedAt))\n        );\n    };\n    const basename = (p) => String(p ?? \"\").split(\"/\").pop();\n    const current = () => letters.find((l) => l.name === selected);\n\n    function toast(text) {\n      const t = $(\"toast\");\n      t.textContent = text;\n      t.classList.add(\"show\");\n      clearTimeout(toast.timer);\n      toast.timer = setTimeout(() => t.classList.remove(\"show\"), 2500);\n    }\n\n    /** Replace the letter list, telling the reviewer about decisions not applied. */\n    function setLetters(next) {\n      for (const l of next) {\n        const was = letters.find((x) => x.name === l.name);\n        if (l.sync === \"failed\" && was?.sync === \"saving\") {\n          toast(\n            `Not filed: ${l.proposal?.sender || l.originalName}: ${l.syncError}`,\n          );\n        }\n      }\n      letters = next;\n      if (!visible().some((l) => l.name === selected)) {\n        selected = visible()[0]?.name ?? null;\n      }\n      render();\n    }\n\n    let pollTimer;\n    function schedulePoll(ms) {\n      clearTimeout(pollTimer);\n      pollTimer = setTimeout(poll, ms);\n    }\n\n    /** Follow the server: every second while anything is saving, else every 10s. */\n    async function poll() {\n      try {\n        setLetters(await (await fetch(\"/api/letters\")).json());\n      } catch { /* retried below */ }\n      schedulePoll(letters.some((l) => l.sync === \"saving\") ? 1000 : 10000);\n    }\n\n    function badge(l) {\n      if (l.sync === \"failed\") return `<span class=\"badge failed\">not filed</span>`;\n      if (l.sync === \"saving\") return `<span class=\"badge saving\">saving…</span>`;\n      if (l.state === \"conflict\") {\n        return `<span class=\"badge failed\">conflict</span>`;\n      }\n      if (l.state === \"held\") {\n        return `<span class=\"badge warn\">${l.reasons?.length ?? 0} to check</span>`;\n      }\n      return `<span class=\"badge ${l.state}\">${l.state}</span>`;\n    }\n\n    function renderQueue() {\n      const items = visible();\n      if (!items.length) {\n        $(\"queue\").innerHTML = `<li class=\"read\">${\n          filter === \"open\"\n            ? \"Nothing to review.\"\n            : \"Nothing filed or skipped in the last \" + RETENTION_DAYS + \" days.\"\n        }</li>`;\n        return;\n      }\n      let lastSender = null;\n      $(\"queue\").innerHTML = items.map((l) => {\n        const p = l.proposal ?? {};\n        let group = \"\";\n        if (filter === \"open\" && senderOf(l) !== lastSender) {\n          lastSender = senderOf(l);\n          const n = items.filter((x) => senderOf(x) === lastSender).length;\n          const sender = esc(lastSender);\n          group = `<li class=\"group\">${sender}<span class=\"actions\">${\n            n > 1 && l.proposal?.sender\n              ? `<button type=\"button\" class=\"bulk\" data-sender=\"${sender}\">File all ${n}</button>`\n              : \"\"\n          }<button type=\"button\" class=\"rename\" data-sender=\"${sender}\" title=\"Rename this sender, now and for future letters\">Rename</button></span></li>`;\n        }\n        return `${group}<li data-name=\"${l.name}\" aria-selected=\"${\n          l.name === selected\n        }\">\n          <div class=\"who\">${\n          esc(\n            filter === \"open\"\n              ? (p.title || p.documentType || l.originalName)\n              : p.sender || l.originalName,\n          )\n        }</div>\n          <div class=\"meta\">${esc(p.date || \"no date\")} · ${esc(p.documentType)} ${\n          badge(l)\n        }</div>\n        </li>`;\n      }).join(\"\");\n    }\n\n    function renderView(l) {\n      const key = l ? `${l.name}:${view}:${l.state}` : \"\";\n      if (key === shownView) return;\n      shownView = key;\n      $(\"docname\").textContent = l ? l.originalName : \"\";\n      $(\"existingTab\").hidden = l?.state !== \"conflict\";\n      if (view === \"existing\" && l?.state !== \"conflict\") view = \"pdf\";\n      document.querySelectorAll(\"[data-view]\").forEach((b) =>\n        b.setAttribute(\"aria-pressed\", b.dataset.view === view)\n      );\n      if (!l) {\n        $(\"view\").innerHTML = `<div class=\"empty\">No letter selected</div>`;\n        return;\n      }\n      $(\"view\").innerHTML = view === \"crop\"\n        ? `<div class=\"crop\"><img src=\"/api/letters/${l.name}/header\" alt=\"The part of the letter the model read\"></div>`\n        : `<iframe src=\"/api/letters/${l.name}/${\n          view === \"existing\" ? \"existing\" : \"pdf\"\n        }#view=FitH\" title=\"Letter\"></iframe>`;\n      // Have the next letter's image ready before the reviewer gets there.\n      const items = visible(),\n        next = items[items.findIndex((x) => x.name === l.name) + 1];\n      if (next) new Image().src = `/api/letters/${next.name}/header`;\n    }\n\n    function asRead(l, field) {\n      const d = l.extracted ?? {};\n      const raw = field === \"documentType\" ? d.documentTypeRaw : d[field];\n      return raw == null ? \"nothing read\" : `read as “${esc(raw)}”`;\n    }\n\n    function renderForm(l) {\n      // Rebuild only when the letter or its state changes, never under the\n      // reviewer's cursor because a poll came back.\n      const key = l ? `${l.name}:${l.state}:${l.sync}:${l.destination}` : \"\";\n      if (key === shownForm) return;\n      shownForm = key;\n      const form = $(\"form\");\n      if (!l) {\n        form.innerHTML = \"\";\n        return;\n      }\n      const d = l.extracted ?? {};\n      const refs = { ...(d.referenceNumbers ?? {}), ...(d.otherDetails ?? {}) };\n      const extra = Object.keys(refs).length\n        ? `<details open><summary>Also read</summary><dl>${\n          Object.entries(refs).map(([k, v]) =>\n            `<dt>${esc(k)}</dt><dd>${\n              esc(typeof v === \"string\" ? v : JSON.stringify(v))\n            }</dd>`\n          ).join(\"\")\n        }</dl></details>`\n        : \"\";\n      const recipient = d.recipient\n        ? `<div class=\"read\">To ${esc(d.recipient)}</div>`\n        : \"\";\n\n      if (!isOpen(l)) {\n        const expires = new Date(\n          new Date(l.updatedAt).getTime() + RETENTION_DAYS * 864e5,\n        );\n        form.innerHTML = `<div class=\"done ${l.state}\"><strong>${\n          l.state === \"filed\" ? \"Filed\" : \"Skipped\"\n        }</strong>\n          ${l.sync === \"saving\" ? `<span class=\"read\"> · saving…</span>` : \"\"}\n          ${\n          l.destination && l.state === \"filed\"\n            ? `<div class=\"dest\" style=\"margin-top:6px\">${esc(l.destination)}</div>`\n            : \"\"\n        }\n          ${\n          l.archivedPath\n            ? `<div class=\"read\">Original moved to ${esc(l.archivedPath)}</div>`\n            : \"\"\n        }\n          <div class=\"read\">${\n          new Date(l.updatedAt).toLocaleString()\n        } · shown here until ${expires.toLocaleDateString()}</div></div>${recipient}${extra}`;\n        return;\n      }\n      const p = l.proposal ?? {};\n      // When the filer held it again, its reasons already say why it was not filed.\n      const again = l.syncError === (l.reasons ?? []).join(\"; \");\n      const reasons = [\n        ...(l.sync === \"failed\" && !again ? [`Not filed: ${l.syncError}`] : []),\n        ...(l.reasons ?? []),\n      ];\n      const conflict = l.state === \"conflict\";\n      form.innerHTML = `\n        ${\n        reasons.length\n          ? `<div class=\"warnings\">${\n            reasons.map((w) => `<p>${esc(w)}</p>`).join(\"\")\n          }</div>`\n          : \"\"\n      }\n        <div><label for=\"sender\">Sender<span class=\"edited\" hidden>edited</span></label>\n          <input id=\"sender\" value=\"${esc(p.sender)}\"><div class=\"read\">${\n        asRead(l, \"sender\")\n      }</div></div>\n        <div><label for=\"date\">Date<span class=\"edited\" hidden>edited</span></label>\n          <input id=\"date\" type=\"date\" value=\"${esc(p.date)}\"><div class=\"read\">${\n        asRead(l, \"date\")\n      }</div></div>\n        <div><label for=\"documentType\">Type<span class=\"edited\" hidden>edited</span></label>\n          <select id=\"documentType\">${\n        TYPES.map((t) =>\n          `<option ${t === p.documentType ? \"selected\" : \"\"}>${t}</option>`\n        ).join(\"\")\n      }</select>\n          <div class=\"read\">${asRead(l, \"documentType\")}</div></div>\n        <div><label for=\"title\">Title<span class=\"edited\" hidden>edited</span></label>\n          <input id=\"title\" value=\"${\n        esc(p.title)\n      }\" placeholder=\"defaults to the type\"></div>\n        <div><label for=\"filename\">File name<span class=\"edited\" hidden>edited</span></label>\n          <input id=\"filename\" value=\"${\n        esc(p.filename)\n      }\" placeholder=\"generated from the fields above\"></div>\n        <div><label>Will be filed as</label><div class=\"dest\" id=\"dest\"></div></div>\n        ${recipient}${extra}\n        <div class=\"error\" id=\"error\"></div>\n        <div class=\"actions\" id=\"actions\">\n          ${\n        conflict\n          ? `<button type=\"button\" class=\"primary danger\" id=\"overwriteBtn\">Overwrite existing</button>\n               <button type=\"submit\" id=\"fileBtn\">File</button>`\n          : `<button type=\"submit\" class=\"primary\" id=\"fileBtn\">File</button>`\n      }\n          <button type=\"button\" id=\"skipBtn\">Don't file</button>\n          <button type=\"button\" id=\"nextBtn\">Next</button>\n        </div>`;\n      FIELDS.forEach((f) => $(f).addEventListener(\"input\", onEdit));\n      $(\"skipBtn\").onclick = () => act({ action: \"skip\" }, () => \"Moved to Skipped\");\n      $(\"nextBtn\").onclick = () => move(1);\n      if (conflict) {\n        $(\"overwriteBtn\").onclick = () => {\n          if (\n            confirm(\n              \"Replace the file already in the FileCabinet with this letter?\",\n            )\n          ) {\n            act(\n              { action: \"file\", ...values(), overwrite: true },\n              (out) => `Filed over ${basename(out.destination)}`,\n            );\n          }\n        };\n      }\n      onEdit();\n      if (!p.sender) $(\"sender\").focus();\n    }\n\n    function values() {\n      const v = Object.fromEntries(FIELDS.map((f) => [f, $(f).value.trim()]));\n      if (!v.filename) delete v.filename;\n      return v;\n    }\n\n    let previewTimer;\n    function onEdit() {\n      const l = current(), v = values();\n      FIELDS.forEach((f) => {\n        $(f).parentElement.querySelector(\".edited\").hidden =\n          (v[f] ?? \"\") === String(l.proposal?.[f] ?? \"\");\n      });\n      clearTimeout(previewTimer);\n      previewTimer = setTimeout(async () => {\n        const { path, problem } =\n          await (await fetch(\n            \"/api/preview?\" + new URLSearchParams({ ...v, letter: l.name }),\n          )).json();\n        const dest = $(\"dest\");\n        if (!dest) return;\n        dest.classList.toggle(\"none\", !path);\n        dest.textContent = path ?? problem ?? \"Needs a sender and a date\";\n        $(\"fileBtn\").disabled = !path;\n        if ($(\"overwriteBtn\")) $(\"overwriteBtn\").disabled = !path;\n      }, 60);\n    }\n\n    function render() {\n      renderQueue();\n      const l = current();\n      renderView(l);\n      renderForm(l);\n    }\n\n    function select(name) {\n      if (!name || name === selected) return;\n      selected = name;\n      render();\n    }\n\n    function move(delta) {\n      const items = visible(), i = items.findIndex((l) => l.name === selected);\n      select(items[Math.min(items.length - 1, Math.max(0, i + delta))]?.name);\n    }\n\n    /** Send a decision; the server answers at once and applies it in the background. */\n    async function act(decision, done) {\n      const l = current();\n      const items = visible();\n      const next = items[items.findIndex((x) => x.name === l.name) + 1]?.name;\n      $(\"error\").textContent = \"\";\n      const res = await fetch(`/api/letters/${l.name}/decide`, {\n        method: \"POST\",\n        headers: { \"content-type\": \"application/json\" },\n        body: JSON.stringify(decision),\n      });\n      const out = await res.json();\n      if (!res.ok) {\n        $(\"error\").textContent = out.error;\n        return;\n      }\n      letters = letters.map((x) => x.name === out.name ? out : x);\n      selected = next ?? null;\n      toast(done(out));\n      setLetters(letters);\n      schedulePoll(1000);\n    }\n\n    /** File every open letter from one sender as proposed. */\n    async function fileAll(sender) {\n      const names = visible().filter((l) => senderOf(l) === sender).map((l) =>\n        l.name\n      );\n      if (\n        !confirm(`File all ${names.length} letters from ${sender} as proposed?`)\n      ) return;\n      const res = await fetch(\"/api/bulk\", {\n        method: \"POST\",\n        headers: { \"content-type\": \"application/json\" },\n        body: JSON.stringify({ names, decision: { action: \"file\" } }),\n      });\n      const out = await res.json();\n      if (!res.ok) {\n        toast(`Nothing filed: ${out.error}`);\n        return;\n      }\n      letters = letters.map((x) => out.find((o) => o.name === x.name) ?? x);\n      toast(`Filing ${out.length} letters from ${sender}`);\n      setLetters(letters);\n      schedulePoll(1000);\n    }\n\n    /** Rename one sender's open letters, and future letters read the same way. */\n    async function renameSender(sender) {\n      const group = visible().filter((l) => senderOf(l) === sender);\n      const known = group[0]?.proposal?.sender ?? \"\";\n      const to = prompt(\n        `Rename \"${sender}\" on ${group.length} letter${\n          group.length === 1 ? \"\" : \"s\"\n        }. Letters from this sender that come later get this name too.`,\n        known,\n      )?.trim();\n      if (!to || to === known) return;\n      toast(`Renaming ${sender}…`);\n      const res = await fetch(\"/api/rename\", {\n        method: \"POST\",\n        headers: { \"content-type\": \"application/json\" },\n        body: JSON.stringify({ names: group.map((l) => l.name), sender: to }),\n      });\n      const out = await res.json();\n      if (!res.ok) {\n        toast(`Not renamed: ${out.error}`);\n        return;\n      }\n      toast(`Renamed ${sender} to ${to}`);\n      setLetters(out);\n    }\n\n    function file(e) {\n      e?.preventDefault();\n      if (!$(\"fileBtn\") || $(\"fileBtn\").disabled) return;\n      act(\n        { action: \"file\", ...values() },\n        (out) => `Filed as ${basename(out.destination)}`,\n      );\n    }\n\n    function setView(v) {\n      view = v;\n      stored(\"view\", v);\n      renderView(current());\n    }\n\n    $(\"form\").addEventListener(\"submit\", file);\n    $(\"queue\").addEventListener(\"click\", (e) => {\n      const bulk = e.target.closest(\".bulk\");\n      if (bulk) return fileAll(bulk.dataset.sender);\n      const rename = e.target.closest(\".rename\");\n      if (rename) return renameSender(rename.dataset.sender);\n      select(e.target.closest(\"li[data-name]\")?.dataset.name);\n    });\n    document.querySelectorAll(\"[data-filter]\").forEach((b) =>\n      b.onclick = () => {\n        filter = b.dataset.filter;\n        document.querySelectorAll(\"[data-filter]\").forEach((x) =>\n          x.setAttribute(\"aria-pressed\", x === b)\n        );\n        selected = visible()[0]?.name ?? null;\n        render();\n      }\n    );\n    document.querySelectorAll(\"[data-view]\").forEach((b) =>\n      b.onclick = () => setView(b.dataset.view)\n    );\n    document.addEventListener(\"keydown\", (e) => {\n      if ((e.metaKey || e.ctrlKey) && e.key === \"Enter\") return file(e);\n      if (e.target.matches(\"input, select\")) {\n        if (e.key === \"Escape\") e.target.blur();\n        return;\n      }\n      if (e.key === \"j\" || e.key === \"ArrowDown\") {\n        e.preventDefault();\n        move(1);\n      }\n      if (e.key === \"k\" || e.key === \"ArrowUp\") {\n        e.preventDefault();\n        move(-1);\n      }\n      if (e.key === \"v\") setView(view === \"pdf\" ? \"crop\" : \"pdf\");\n    });\n    poll();\n    </script>\n  </body>\n</html>\n";
+export const PAGE_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mail review</title>
+    <style>
+    :root {
+      --bg: #f6f5f2;
+      --panel: #ffffff;
+      --line: #e2e0da;
+      --text: #1d1c1a;
+      --muted: #6d6a63;
+      --accent: #2f5bd3;
+      --accent-text: #fff;
+      --warn-bg: #fff4d6;
+      --warn: #8a5a00;
+      --ok: #2e7d4f;
+      --bad: #b3261e;
+      --sel: #e8eefc;
+      --edited: #7a3fc4;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #161615;
+        --panel: #1f1f1d;
+        --line: #34332f;
+        --text: #ecebe7;
+        --muted: #9b988f;
+        --accent: #7d9cf0;
+        --accent-text: #10131c;
+        --warn-bg: #3a2f12;
+        --warn: #f0c96a;
+        --ok: #6cc592;
+        --bad: #f08a80;
+        --sel: #263150;
+        --edited: #c49cf5;
+      }
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 280px 1fr 380px;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.4 -apple-system, system-ui, sans-serif;
+    }
+    aside,
+    main,
+    form {
+      min-height: 0;
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+    }
+    aside header {
+      padding: 14px 14px 8px;
+    }
+    h1 {
+      font-size: 15px;
+      margin: 0 0 10px;
+    }
+    .tabs {
+      display: flex;
+      gap: 4px;
+    }
+    .tabs button {
+      flex: 1;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      padding: 5px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .tabs button[aria-pressed="true"] {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+    ul {
+      list-style: none;
+      margin: 0;
+      padding: 4px 8px;
+      overflow: auto;
+      flex: 1;
+    }
+    li {
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-bottom: 2px;
+    }
+    li[aria-selected="true"] {
+      background: var(--sel);
+    }
+    li .who {
+      font-weight: 600;
+    }
+    li .meta {
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .badge {
+      font-size: 11px;
+      padding: 0 6px;
+      border-radius: 9px;
+      font-weight: 600;
+    }
+    .badge.warn {
+      background: var(--warn-bg);
+      color: var(--warn);
+    }
+    .badge.filed {
+      color: var(--ok);
+    }
+    .badge.skipped {
+      color: var(--muted);
+    }
+    li.group {
+      cursor: default;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      padding: 12px 10px 4px;
+      margin-top: 6px;
+      border-top: 1px solid var(--line);
+      border-radius: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    li.group:first-child {
+      border-top: none;
+      margin-top: 0;
+    }
+    li.group .actions {
+      margin-left: auto;
+      display: flex;
+      gap: 6px;
+    }
+    li.group button {
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--accent);
+      background: none;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 1px 8px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    aside footer {
+      padding: 10px 14px;
+      color: var(--muted);
+      font-size: 12px;
+      border-top: 1px solid var(--line);
+    }
+    kbd {
+      font: 11px ui-monospace, monospace;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 0 4px;
+    }
+
+    main {
+      display: flex;
+      flex-direction: column;
+    }
+    main nav {
+      display: flex;
+      gap: 4px;
+      padding: 8px;
+      border-bottom: 1px solid var(--line);
+      align-items: center;
+    }
+    main nav .file {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .view {
+      flex: 1;
+      min-height: 0;
+    }
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #888;
+    }
+    .crop {
+      overflow: auto;
+      padding: 16px;
+      height: 100%;
+    }
+    .crop img {
+      max-width: 100%;
+      box-shadow: 0 1px 6px #0003;
+      background: #fff;
+    }
+    .empty {
+      display: grid;
+      place-items: center;
+      height: 100%;
+      color: var(--muted);
+    }
+
+    form {
+      border-left: 1px solid var(--line);
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      overflow: auto;
+      padding: 16px;
+      gap: 14px;
+    }
+    .warnings {
+      background: var(--warn-bg);
+      color: var(--warn);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    .warnings p {
+      margin: 0;
+    }
+    label {
+      display: block;
+      font-weight: 600;
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    label .edited {
+      color: var(--edited);
+      font-weight: 500;
+      margin-left: 6px;
+    }
+    input,
+    select {
+      width: 100%;
+      padding: 7px 9px;
+      font: inherit;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    input:focus,
+    select:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: -1px;
+    }
+    .read {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 3px;
+    }
+    .dest {
+      font: 12px ui-monospace, monospace;
+      background: var(--bg);
+      padding: 8px;
+      border-radius: 6px;
+      word-break: break-all;
+      border: 1px dashed var(--line);
+    }
+    .dest.none {
+      color: var(--muted);
+      font-family: inherit;
+    }
+    details summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 12px;
+    }
+    dl {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 2px 10px;
+      margin: 8px 0 0;
+      font-size: 12px;
+    }
+    dt {
+      color: var(--muted);
+    }
+    dd {
+      margin: 0;
+      word-break: break-word;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: auto;
+      padding-top: 8px;
+    }
+    .actions button {
+      padding: 9px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    .actions .primary {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+      flex: 1;
+      font-weight: 600;
+    }
+    button:disabled {
+      opacity: .5;
+      cursor: progress;
+    }
+    .done {
+      border-radius: 8px;
+      padding: 10px;
+      background: var(--bg);
+    }
+    .done.filed strong {
+      color: var(--ok);
+    }
+    .actions .danger {
+      background: var(--bad);
+      border-color: var(--bad);
+    }
+    .done.skipped strong {
+      color: var(--bad);
+    }
+    .error {
+      color: var(--bad);
+      white-space: pre-wrap;
+      font-size: 12px;
+    }
+    .toast {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--text);
+      color: var(--bg);
+      padding: 8px 14px;
+      border-radius: 8px;
+      opacity: 0;
+      transition: opacity .2s;
+      pointer-events: none;
+    }
+    .toast.show {
+      opacity: 1;
+    }
+    .badge.saving {
+      color: var(--muted);
+    }
+    .badge.failed {
+      background: var(--bad);
+      color: var(--panel);
+    }
+    .reject-box {
+      display: flex;
+      gap: 8px;
+    }
+    .reject-box input {
+      flex: 1;
+    }
+    </style>
+  </head>
+  <body>
+    <aside>
+      <header>
+        <h1>Mail review</h1>
+        <div class="tabs">
+          <button type="button" data-filter="open"
+            aria-pressed="true">To review</button>
+          <button type="button" data-filter="done"
+            aria-pressed="false">Done</button>
+        </div>
+      </header>
+      <ul id="queue"></ul>
+      <footer><kbd>j</kbd>/<kbd>k</kbd> move · <kbd>⌘↵</kbd> file · <kbd>v</kbd> toggle view</footer>
+    </aside>
+    <main>
+      <nav>
+        <div class="tabs" style="width:390px">
+          <button type="button" data-view="pdf"
+            aria-pressed="true">Letter</button>
+          <button type="button" data-view="crop"
+            aria-pressed="false">What was read</button>
+          <button type="button" data-view="existing" id="existingTab"
+            aria-pressed="false" hidden>Existing file</button>
+        </div>
+        <span class="file" id="docname"></span>
+      </nav>
+      <div class="view" id="view">
+        <div class="empty">Loading…</div>
+      </div>
+    </main>
+    <form id="form" autocomplete="off"></form>
+    <div class="toast" id="toast"></div>
+
+    <script>
+    const TYPES = ["bill", "statement", "invoice", "reminder", "notice", "receipt", "other"];
+    const FIELDS = ["sender", "date", "documentType", "title", "filename"];
+    /** States a reviewer can still decide a letter in. */
+    const OPEN = ["held", "conflict"];
+    const RETENTION_DAYS = 30;
+    let letters = [], filter = "open", selected = null;
+    let view = new URLSearchParams(location.search).get("view") ?? stored("view") ??
+      "pdf";
+    /** What the document pane and form show, so they are only rebuilt on change. */
+    let shownView = null, shownForm = null;
+
+    function stored(key, value) {
+      try {
+        if (value === undefined) return localStorage.getItem(key);
+        localStorage.setItem(key, value);
+      } catch {
+        return null;
+      }
+    }
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) =>
+      String(s ?? "").replace(
+        /[&<>"]/g,
+        (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+      );
+    const isOpen = (l) => OPEN.includes(l.state);
+    const senderOf = (l) => l.proposal?.sender || "Unknown sender";
+    /** The open queue, grouped by sender so a sender's letters can be filed together. */
+    const visible = () => {
+      const items = letters.filter((l) => isOpen(l) === (filter === "open"));
+      return filter === "open"
+        ? items.sort((a, b) => senderOf(a).localeCompare(senderOf(b)))
+        : items.sort((a, b) =>
+          String(b.updatedAt).localeCompare(String(a.updatedAt))
+        );
+    };
+    const basename = (p) => String(p ?? "").split("/").pop();
+    const current = () => letters.find((l) => l.name === selected);
+
+    function toast(text) {
+      const t = $("toast");
+      t.textContent = text;
+      t.classList.add("show");
+      clearTimeout(toast.timer);
+      toast.timer = setTimeout(() => t.classList.remove("show"), 2500);
+    }
+
+    /** Replace the letter list, telling the reviewer about decisions not applied. */
+    function setLetters(next) {
+      for (const l of next) {
+        const was = letters.find((x) => x.name === l.name);
+        if (l.sync === "failed" && was?.sync === "saving") {
+          toast(
+            \`Not filed: \${l.proposal?.sender || l.originalName}: \${l.syncError}\`,
+          );
+        }
+      }
+      letters = next;
+      if (!visible().some((l) => l.name === selected)) {
+        selected = visible()[0]?.name ?? null;
+      }
+      render();
+    }
+
+    let pollTimer;
+    function schedulePoll(ms) {
+      clearTimeout(pollTimer);
+      pollTimer = setTimeout(poll, ms);
+    }
+
+    /** Follow the server: every second while anything is saving, else every 10s. */
+    async function poll() {
+      try {
+        setLetters(await (await fetch("/api/letters")).json());
+      } catch { /* retried below */ }
+      schedulePoll(letters.some((l) => l.sync === "saving") ? 1000 : 10000);
+    }
+
+    function badge(l) {
+      if (l.sync === "failed") return \`<span class="badge failed">not filed</span>\`;
+      if (l.sync === "saving") return \`<span class="badge saving">saving…</span>\`;
+      if (l.state === "conflict") {
+        return \`<span class="badge failed">conflict</span>\`;
+      }
+      if (l.state === "held") {
+        return \`<span class="badge warn">\${l.reasons?.length ?? 0} to check</span>\`;
+      }
+      return \`<span class="badge \${l.state}">\${l.state}</span>\`;
+    }
+
+    function renderQueue() {
+      const items = visible();
+      if (!items.length) {
+        $("queue").innerHTML = \`<li class="read">\${
+          filter === "open"
+            ? "Nothing to review."
+            : "Nothing filed or skipped in the last " + RETENTION_DAYS + " days."
+        }</li>\`;
+        return;
+      }
+      let lastSender = null;
+      $("queue").innerHTML = items.map((l) => {
+        const p = l.proposal ?? {};
+        let group = "";
+        if (filter === "open" && senderOf(l) !== lastSender) {
+          lastSender = senderOf(l);
+          const n = items.filter((x) => senderOf(x) === lastSender).length;
+          const sender = esc(lastSender);
+          group = \`<li class="group">\${sender}<span class="actions">\${
+            n > 1 && l.proposal?.sender
+              ? \`<button type="button" class="bulk" data-sender="\${sender}">File all \${n}</button>\`
+              : ""
+          }<button type="button" class="rename" data-sender="\${sender}" title="Rename this sender, now and for future letters">Rename</button></span></li>\`;
+        }
+        return \`\${group}<li data-name="\${l.name}" aria-selected="\${
+          l.name === selected
+        }">
+          <div class="who">\${
+          esc(
+            filter === "open"
+              ? (p.title || p.documentType || l.originalName)
+              : p.sender || l.originalName,
+          )
+        }</div>
+          <div class="meta">\${esc(p.date || "no date")} · \${esc(p.documentType)} \${
+          badge(l)
+        }</div>
+        </li>\`;
+      }).join("");
+    }
+
+    function renderView(l) {
+      const key = l ? \`\${l.name}:\${view}:\${l.state}\` : "";
+      if (key === shownView) return;
+      shownView = key;
+      $("docname").textContent = l ? l.originalName : "";
+      $("existingTab").hidden = l?.state !== "conflict";
+      if (view === "existing" && l?.state !== "conflict") view = "pdf";
+      document.querySelectorAll("[data-view]").forEach((b) =>
+        b.setAttribute("aria-pressed", b.dataset.view === view)
+      );
+      if (!l) {
+        $("view").innerHTML = \`<div class="empty">No letter selected</div>\`;
+        return;
+      }
+      $("view").innerHTML = view === "crop"
+        ? \`<div class="crop"><img src="/api/letters/\${l.name}/header" alt="The part of the letter the model read"></div>\`
+        : \`<iframe src="/api/letters/\${l.name}/\${
+          view === "existing" ? "existing" : "pdf"
+        }#view=FitH" title="Letter"></iframe>\`;
+      // Have the next letter's image ready before the reviewer gets there.
+      const items = visible(),
+        next = items[items.findIndex((x) => x.name === l.name) + 1];
+      if (next) new Image().src = \`/api/letters/\${next.name}/header\`;
+    }
+
+    function asRead(l, field) {
+      const d = l.extracted ?? {};
+      const raw = field === "documentType" ? d.documentTypeRaw : d[field];
+      return raw == null ? "nothing read" : \`read as “\${esc(raw)}”\`;
+    }
+
+    function renderForm(l) {
+      // Rebuild only when the letter or its state changes, never under the
+      // reviewer's cursor because a poll came back.
+      const key = l ? \`\${l.name}:\${l.state}:\${l.sync}:\${l.destination}\` : "";
+      if (key === shownForm) return;
+      shownForm = key;
+      const form = $("form");
+      if (!l) {
+        form.innerHTML = "";
+        return;
+      }
+      const d = l.extracted ?? {};
+      const refs = { ...(d.referenceNumbers ?? {}), ...(d.otherDetails ?? {}) };
+      const extra = Object.keys(refs).length
+        ? \`<details open><summary>Also read</summary><dl>\${
+          Object.entries(refs).map(([k, v]) =>
+            \`<dt>\${esc(k)}</dt><dd>\${
+              esc(typeof v === "string" ? v : JSON.stringify(v))
+            }</dd>\`
+          ).join("")
+        }</dl></details>\`
+        : "";
+      const recipient = d.recipient
+        ? \`<div class="read">To \${esc(d.recipient)}</div>\`
+        : "";
+
+      if (!isOpen(l)) {
+        const expires = new Date(
+          new Date(l.updatedAt).getTime() + RETENTION_DAYS * 864e5,
+        );
+        form.innerHTML = \`<div class="done \${l.state}"><strong>\${
+          l.state === "filed" ? "Filed" : "Skipped"
+        }</strong>
+          \${l.sync === "saving" ? \`<span class="read"> · saving…</span>\` : ""}
+          \${
+          l.destination && l.state === "filed"
+            ? \`<div class="dest" style="margin-top:6px">\${esc(l.destination)}</div>\`
+            : ""
+        }
+          \${
+          l.archivedPath
+            ? \`<div class="read">Original moved to \${esc(l.archivedPath)}</div>\`
+            : ""
+        }
+          <div class="read">\${
+          new Date(l.updatedAt).toLocaleString()
+        } · shown here until \${expires.toLocaleDateString()}</div></div>\${recipient}\${extra}\`;
+        return;
+      }
+      const p = l.proposal ?? {};
+      // When the filer held it again, its reasons already say why it was not filed.
+      const again = l.syncError === (l.reasons ?? []).join("; ");
+      const reasons = [
+        ...(l.sync === "failed" && !again ? [\`Not filed: \${l.syncError}\`] : []),
+        ...(l.reasons ?? []),
+      ];
+      const conflict = l.state === "conflict";
+      form.innerHTML = \`
+        \${
+        reasons.length
+          ? \`<div class="warnings">\${
+            reasons.map((w) => \`<p>\${esc(w)}</p>\`).join("")
+          }</div>\`
+          : ""
+      }
+        <div><label for="sender">Sender<span class="edited" hidden>edited</span></label>
+          <input id="sender" value="\${esc(p.sender)}"><div class="read">\${
+        asRead(l, "sender")
+      }</div></div>
+        <div><label for="date">Date<span class="edited" hidden>edited</span></label>
+          <input id="date" type="date" value="\${esc(p.date)}"><div class="read">\${
+        asRead(l, "date")
+      }</div></div>
+        <div><label for="documentType">Type<span class="edited" hidden>edited</span></label>
+          <select id="documentType">\${
+        TYPES.map((t) =>
+          \`<option \${t === p.documentType ? "selected" : ""}>\${t}</option>\`
+        ).join("")
+      }</select>
+          <div class="read">\${asRead(l, "documentType")}</div></div>
+        <div><label for="title">Title<span class="edited" hidden>edited</span></label>
+          <input id="title" value="\${
+        esc(p.title)
+      }" placeholder="defaults to the type"></div>
+        <div><label for="filename">File name<span class="edited" hidden>edited</span></label>
+          <input id="filename" value="\${
+        esc(p.filename)
+      }" placeholder="generated from the fields above"></div>
+        <div><label>Will be filed as</label><div class="dest" id="dest"></div></div>
+        \${recipient}\${extra}
+        <div class="error" id="error"></div>
+        <div class="actions" id="actions">
+          \${
+        conflict
+          ? \`<button type="button" class="primary danger" id="overwriteBtn">Overwrite existing</button>
+               <button type="submit" id="fileBtn">File</button>\`
+          : \`<button type="submit" class="primary" id="fileBtn">File</button>\`
+      }
+          <button type="button" id="skipBtn">Don't file</button>
+          <button type="button" id="nextBtn">Next</button>
+        </div>\`;
+      FIELDS.forEach((f) => $(f).addEventListener("input", onEdit));
+      $("skipBtn").onclick = () => act({ action: "skip" }, () => "Moved to Skipped");
+      $("nextBtn").onclick = () => move(1);
+      if (conflict) {
+        $("overwriteBtn").onclick = () => {
+          if (
+            confirm(
+              "Replace the file already in the FileCabinet with this letter?",
+            )
+          ) {
+            act(
+              { action: "file", ...values(), overwrite: true },
+              (out) => \`Filed over \${basename(out.destination)}\`,
+            );
+          }
+        };
+      }
+      onEdit();
+      if (!p.sender) $("sender").focus();
+    }
+
+    function values() {
+      const v = Object.fromEntries(FIELDS.map((f) => [f, $(f).value.trim()]));
+      if (!v.filename) delete v.filename;
+      return v;
+    }
+
+    let previewTimer;
+    function onEdit() {
+      const l = current(), v = values();
+      FIELDS.forEach((f) => {
+        $(f).parentElement.querySelector(".edited").hidden =
+          (v[f] ?? "") === String(l.proposal?.[f] ?? "");
+      });
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(async () => {
+        const { path, problem } =
+          await (await fetch(
+            "/api/preview?" + new URLSearchParams({ ...v, letter: l.name }),
+          )).json();
+        const dest = $("dest");
+        if (!dest) return;
+        dest.classList.toggle("none", !path);
+        dest.textContent = path ?? problem ?? "Needs a sender and a date";
+        $("fileBtn").disabled = !path;
+        if ($("overwriteBtn")) $("overwriteBtn").disabled = !path;
+      }, 60);
+    }
+
+    function render() {
+      renderQueue();
+      const l = current();
+      renderView(l);
+      renderForm(l);
+    }
+
+    function select(name) {
+      if (!name || name === selected) return;
+      selected = name;
+      render();
+    }
+
+    function move(delta) {
+      const items = visible(), i = items.findIndex((l) => l.name === selected);
+      select(items[Math.min(items.length - 1, Math.max(0, i + delta))]?.name);
+    }
+
+    /** Send a decision; the server answers at once and applies it in the background. */
+    async function act(decision, done) {
+      const l = current();
+      const items = visible();
+      const next = items[items.findIndex((x) => x.name === l.name) + 1]?.name;
+      $("error").textContent = "";
+      const res = await fetch(\`/api/letters/\${l.name}/decide\`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(decision),
+      });
+      const out = await res.json();
+      if (!res.ok) {
+        $("error").textContent = out.error;
+        return;
+      }
+      letters = letters.map((x) => x.name === out.name ? out : x);
+      selected = next ?? null;
+      toast(done(out));
+      setLetters(letters);
+      schedulePoll(1000);
+    }
+
+    /** File every open letter from one sender as proposed. */
+    async function fileAll(sender) {
+      const names = visible().filter((l) => senderOf(l) === sender).map((l) =>
+        l.name
+      );
+      if (
+        !confirm(\`File all \${names.length} letters from \${sender} as proposed?\`)
+      ) return;
+      const res = await fetch("/api/bulk", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ names, decision: { action: "file" } }),
+      });
+      const out = await res.json();
+      if (!res.ok) {
+        toast(\`Nothing filed: \${out.error}\`);
+        return;
+      }
+      letters = letters.map((x) => out.find((o) => o.name === x.name) ?? x);
+      toast(\`Filing \${out.length} letters from \${sender}\`);
+      setLetters(letters);
+      schedulePoll(1000);
+    }
+
+    /** Rename one sender's open letters, and future letters read the same way. */
+    async function renameSender(sender) {
+      const group = visible().filter((l) => senderOf(l) === sender);
+      const known = group[0]?.proposal?.sender ?? "";
+      const to = prompt(
+        \`Rename "\${sender}" on \${group.length} letter\${
+          group.length === 1 ? "" : "s"
+        }. Letters from this sender that come later get this name too.\`,
+        known,
+      )?.trim();
+      if (!to || to === known) return;
+      toast(\`Renaming \${sender}…\`);
+      const res = await fetch("/api/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ names: group.map((l) => l.name), sender: to }),
+      });
+      const out = await res.json();
+      if (!res.ok) {
+        toast(\`Not renamed: \${out.error}\`);
+        return;
+      }
+      toast(\`Renamed \${sender} to \${to}\`);
+      setLetters(out);
+    }
+
+    function file(e) {
+      e?.preventDefault();
+      if (!$("fileBtn") || $("fileBtn").disabled) return;
+      act(
+        { action: "file", ...values() },
+        (out) => \`Filed as \${basename(out.destination)}\`,
+      );
+    }
+
+    function setView(v) {
+      view = v;
+      stored("view", v);
+      renderView(current());
+    }
+
+    $("form").addEventListener("submit", file);
+    $("queue").addEventListener("click", (e) => {
+      const bulk = e.target.closest(".bulk");
+      if (bulk) return fileAll(bulk.dataset.sender);
+      const rename = e.target.closest(".rename");
+      if (rename) return renameSender(rename.dataset.sender);
+      select(e.target.closest("li[data-name]")?.dataset.name);
+    });
+    document.querySelectorAll("[data-filter]").forEach((b) =>
+      b.onclick = () => {
+        filter = b.dataset.filter;
+        document.querySelectorAll("[data-filter]").forEach((x) =>
+          x.setAttribute("aria-pressed", x === b)
+        );
+        selected = visible()[0]?.name ?? null;
+        render();
+      }
+    );
+    document.querySelectorAll("[data-view]").forEach((b) =>
+      b.onclick = () => setView(b.dataset.view)
+    );
+    document.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") return file(e);
+      if (e.target.matches("input, select")) {
+        if (e.key === "Escape") e.target.blur();
+        return;
+      }
+      if (e.key === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        move(1);
+      }
+      if (e.key === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        move(-1);
+      }
+      if (e.key === "v") setView(view === "pdf" ? "crop" : "pdf");
+    });
+    poll();
+    </script>
+  </body>
+</html>
+`;
