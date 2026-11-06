@@ -643,3 +643,30 @@ def test_without_watch_stdin_a_closed_stdin_does_not_stop_the_helper(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["rawOutput"] == "{}"
+
+
+def test_without_ps_a_holder_is_not_taken_for_a_helper(monkeypatch):
+    """Slim Linux images have no ps: a waiter must then say the holder is
+    unknown and go on waiting, not crash."""
+    monkeypatch.setenv("PATH", "/nonexistent")
+    assert qianfan_ocr.is_helper_process(os.getpid()) is False
+
+
+def _sleeping_script(tmp_path, name):
+    script = tmp_path / name
+    script.write_text("import time\ntime.sleep(60)\n")
+    return subprocess.Popen([sys.executable, str(script)])
+
+
+@pytest.mark.parametrize(
+    "name, helper",
+    [("qianfan_ocr.py", True), ("test_qianfan_ocr.py", False), ("qianfan_ocr.py.bak", False)],
+)
+def test_only_a_process_running_qianfan_ocr_py_is_a_helper(tmp_path, name, helper):
+    process = _sleeping_script(tmp_path, name)
+    try:
+        assert _wait_for(lambda: qianfan_ocr.is_helper_process(process.pid) is helper, 5)
+        assert qianfan_ocr.is_helper_process(process.pid) is helper
+    finally:
+        process.kill()
+        process.wait(timeout=5)

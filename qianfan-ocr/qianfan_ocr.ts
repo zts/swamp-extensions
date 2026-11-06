@@ -8,7 +8,7 @@
  * @module
  */
 import { z } from "npm:zod@4.6.7";
-import { holderPath, stopHolder } from "./lock_holder.ts";
+import { holderPath, HolderSchema, stopHolder } from "./lock_holder.ts";
 import {
   environmentExists,
   runHelper,
@@ -142,13 +142,9 @@ const StopSchema = z.object({
   found: z.enum(["running", "stale", "none"]).describe(
     "running: a live helper held the model lock; stale: holder.json named a process that is gone or not a helper; none: no holder.json",
   ),
-  holder: z.object({
-    pid: z.number(),
-    parentPid: z.number().optional(),
-    startedAt: z.string().optional(),
-    command: z.string().nullable().optional(),
-    batchId: z.string().nullable().optional(),
-  }).nullable().describe("What the helper recorded about itself"),
+  holder: HolderSchema.nullable().describe(
+    "What the helper recorded about itself; null when holder.json was missing or unreadable",
+  ),
   stopped: z.boolean(),
   signal: z.enum(["SIGTERM", "SIGKILL"]).nullable(),
   stoppedAt: z.string(),
@@ -602,10 +598,14 @@ export const behavior = {
         const holder = result.holder;
         if (result.found === "none") {
           context.logger.info("No qianfan-ocr helper holds the model lock");
+        } else if (!holder) {
+          context.logger.info(
+            "holder.json could not be read, so no helper can be named; nothing to stop",
+          );
         } else if (result.found === "stale") {
           context.logger.info(
             "holder.json names pid {pid} ({batchId}), which is no longer a qianfan-ocr helper; nothing to stop",
-            { pid: holder!.pid, batchId: holder!.batchId ?? null },
+            { pid: holder.pid, batchId: holder.batchId ?? null },
           );
         } else if (result.stopped) {
           context.logger.info(

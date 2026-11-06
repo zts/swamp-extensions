@@ -892,3 +892,24 @@ Deno.test("stop reports a stale holder record without killing anything", async (
     await Deno.remove(cache, { recursive: true });
   }
 });
+
+Deno.test("stop records an unreadable holder record as stale", async () => {
+  const cache = await Deno.makeTempDir({ prefix: "qianfan-ocr-test-" });
+  const before = Deno.env.get("XDG_CACHE_HOME");
+  Deno.env.set("XDG_CACHE_HOME", cache);
+  try {
+    await Deno.mkdir(`${cache}/qianfan-ocr`);
+    await Deno.writeTextFile(`${cache}/qianfan-ocr/holder.json`, "{not json");
+    await withFixture({}, async (f) => {
+      const { written, error, logs } = await run(f, "stop", {});
+      assertEquals(error, null);
+      assertEquals(written[0].data.found, "stale");
+      assertEquals(written[0].data.holder, null);
+      assertExists(logs.find((l) => l.message.includes("could not be read")));
+    });
+  } finally {
+    if (before === undefined) Deno.env.delete("XDG_CACHE_HOME");
+    else Deno.env.set("XDG_CACHE_HOME", before);
+    await Deno.remove(cache, { recursive: true });
+  }
+});

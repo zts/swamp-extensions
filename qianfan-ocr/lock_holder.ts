@@ -6,21 +6,26 @@
  *
  * @module
  */
+import { z } from "npm:zod@4.6.7";
 
 /** What a helper records about itself once it holds the model lock. */
-export interface Holder {
-  pid: number;
-  parentPid?: number;
-  startedAt?: string;
-  command?: string | null;
-  batchId?: string | null;
-}
+export const HolderSchema = z.object({
+  pid: z.number().int().positive(),
+  parentPid: z.number().int().positive().optional(),
+  startedAt: z.string().optional(),
+  command: z.string().nullable().optional(),
+  batchId: z.string().nullable().optional(),
+});
+
+/** A holder record that passed HolderSchema. */
+export type Holder = z.infer<typeof HolderSchema>;
 
 /** What stop found and did. */
 export interface StopResult {
   /**
    * running: a live helper held the lock; stale: holder.json names a process
-   * that is gone or is not a helper; none: there is no holder.json.
+   * that is gone or is not a helper, or cannot be read (holder is then null);
+   * none: there is no holder.json.
    */
   found: "running" | "stale" | "none";
   holder: Holder | null;
@@ -39,17 +44,28 @@ export function holderPath(
   return `${cache}/qianfan-ocr/holder.json`;
 }
 
-async function readHolder(path: string): Promise<Holder | null> {
+/** The holder record at path: missing, unreadable, or one that is valid. */
+async function readHolder(
+  path: string,
+): Promise<"missing" | "invalid" | Holder> {
+  let text;
   try {
-    const holder = JSON.parse(await Deno.readTextFile(path));
-    return holder && typeof holder === "object" &&
-        Number.isInteger(holder.pid) && holder.pid > 0
-      ? holder
-      : null;
+    text = await Deno.readTextFile(path);
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return "missing";
+    throw error;
+  }
+  try {
+    const holder = HolderSchema.safeParse(JSON.parse(text));
+    return holder.success ? holder.data : "invalid";
   } catch {
-    return null;
+    return "invalid";
   }
 }
+
+/** qianfan_ocr.py as a whole argument or the end of a path, not part of a
+ * longer name such as test_qianfan_ocr.py; as the helper matches it. */
+const HELPER_COMMAND = /(^|[\s/])qianfan_ocr\.py(\s|$)/;
 
 /** pid's state and command line from ps; null when there is no such process. */
 async function processInfo(
@@ -58,12 +74,23 @@ async function processInfo(
   // ps reads one process's state and command line, so stop never signals a
   // PID the OS has given to something other than a helper; the argv is a
   // number and fixed flags.
-  // swamp-quality-ignore deno-command
-  const { code, stdout } = await new Deno.Command("ps", {
-    args: ["-o", "stat=,command=", "-p", String(pid)],
-    stdout: "piped",
-    stderr: "null",
-  }).output();
+  let output;
+  try {
+    // swamp-quality-ignore deno-command
+    output = await new Deno.Command("ps", {
+      args: ["-o", "stat=,command=", "-p", String(pid)],
+      stdout: "piped",
+      stderr: "null",
+    }).output();
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      throw new Error(
+        "stop needs ps to check a PID is a qianfan-ocr helper before signalling it; install procps",
+      );
+    }
+    throw error;
+  }
+  const { code, stdout } = output;
   const line = decoder.decode(stdout).trim();
   if (code !== 0 || !line) return null;
   const [state, ...command] = line.split(/\s+/);
@@ -74,7 +101,7 @@ async function processInfo(
 async function isHelper(pid: number): Promise<boolean> {
   const info = await processInfo(pid);
   return info !== null && !info.state.startsWith("Z") &&
-    info.command.includes("qianfan_ocr.py");
+    HELPER_COMMAND.test(info.command);
 }
 
 async function gone(pid: number): Promise<boolean> {
@@ -111,8 +138,11 @@ export async function stopHolder(
   { graceMs = 10_000 }: { graceMs?: number } = {},
 ): Promise<StopResult> {
   const holder = await readHolder(path);
-  if (!holder) {
+  if (holder === "missing") {
     return { found: "none", holder: null, stopped: false, signal: null };
+  }
+  if (holder === "invalid") {
+    return { found: "stale", holder: null, stopped: false, signal: null };
   }
   if (!await isHelper(holder.pid)) {
     return { found: "stale", holder, stopped: false, signal: null };

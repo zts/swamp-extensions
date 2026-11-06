@@ -105,13 +105,22 @@ def lock_path():
     return Path(cache) / "qianfan-ocr" / "model.lock"
 
 
+# qianfan_ocr.py as a whole argument or the end of a path, not part of a
+# longer name such as test_qianfan_ocr.py.
+HELPER_COMMAND = re.compile(r"(^|[\s/])qianfan_ocr\.py(\s|$)")
+
+
 def is_helper_process(pid):
     """Whether pid is a live process running qianfan_ocr.py, so a PID the OS
-    has since given to something else is never taken for a helper."""
-    result = subprocess.run(
-        ["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True
-    )
-    return result.returncode == 0 and "qianfan_ocr.py" in result.stdout
+    has since given to something else is never taken for a helper. Without
+    ps (slim Linux images lack it), no process is."""
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True
+        )
+    except OSError:
+        return False
+    return result.returncode == 0 and bool(HELPER_COMMAND.search(result.stdout.strip()))
 
 
 def read_holder(path):

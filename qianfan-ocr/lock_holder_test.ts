@@ -1,4 +1,9 @@
-import { assert, assertEquals } from "jsr:@std/assert@1.0.19";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "jsr:@std/assert@1.0.19";
 import { holderPath, stopHolder } from "./lock_holder.ts";
 
 const decoder = new TextDecoder();
@@ -169,6 +174,57 @@ Deno.test("stop never kills a reused PID that is not a qianfan helper", async ()
     } finally {
       other.kill("SIGKILL");
       await other.status;
+    }
+  });
+});
+
+Deno.test("stop never kills a process whose script only looks like the helper", async () => {
+  await withCache(async (f) => {
+    const script = `${f.dir}/test_qianfan_ocr.py`;
+    await Deno.writeTextFile(script, "import time\ntime.sleep(60)\n");
+    const other = new Deno.Command("python3", { args: [script] }).spawn();
+    try {
+      await Deno.writeTextFile(f.holder, JSON.stringify({ pid: other.pid }));
+      const result = await stopHolder(f.holder);
+      assertEquals(result.found, "stale");
+      assertEquals(result.stopped, false);
+      assertEquals(await running(other.pid), true);
+    } finally {
+      other.kill("SIGKILL");
+      await other.status;
+    }
+  });
+});
+
+Deno.test("stop treats a malformed holder record as stale and signals nothing", async () => {
+  await withCache(async (f) => {
+    const helper = await startHelper(f);
+    try {
+      await Deno.writeTextFile(
+        f.holder,
+        JSON.stringify({ pid: helper.pid, batchId: 5 }),
+      );
+      const result = await stopHolder(f.holder);
+      assertEquals(result.found, "stale");
+      assertEquals(result.holder, null);
+      assertEquals(result.stopped, false);
+      assertEquals(await running(helper.pid), true);
+    } finally {
+      await cleanUp(helper);
+    }
+  });
+});
+
+Deno.test("stop without ps says it needs ps", async () => {
+  await withCache(async (f) => {
+    await Deno.writeTextFile(f.holder, JSON.stringify({ pid: 1 }));
+    const path = Deno.env.get("PATH")!;
+    Deno.env.set("PATH", "/nonexistent");
+    try {
+      const error = await assertRejects(() => stopHolder(f.holder));
+      assertStringIncludes((error as Error).message, "stop needs ps");
+    } finally {
+      Deno.env.set("PATH", path);
     }
   });
 });
