@@ -1,0 +1,95 @@
+id: 62f96d0f-e5e1-49a1-999a-07c31fddfd46
+name: "@zts/home-mail-room/process-incoming"
+description: >-
+  Read every scanned letter in Inbound/Incoming, a batch at a time, then file
+  everything waiting in ReadyToFile. Each batch is one step: the scanner
+  reads its letters with one load of the OCR model and moves them to
+  ReadyToFile, or to Failed when they cannot be read. A batch that fails
+  leaves its letters in Incoming and the run goes on to the next. The filer
+  then files every letter it can, including ones left by earlier runs, and
+  holds the rest for the review page. Uses the behaviors named scanner and
+  filer; needs an installed @zts/qianfan-ocr (see the extension's README).
+tags: {}
+inputs:
+  type: object
+  properties:
+    batchSize:
+      type: integer
+      description: Letters read with each load of the model
+      default: 20
+    maxBatches:
+      type: integer
+      description: Most batches to read this run, 0 for all of Incoming
+      default: 0
+    fraction:
+      type: number
+      description: Share of the first page, from the top, to read first
+      default: 0.25
+jobs:
+  # The list is named after the run, so the scan job's forEach reads this
+  # run's batches and no other's.
+  - name: list
+    description: Split Incoming into batches
+    steps:
+      - name: list-incoming
+        task:
+          type: behavior
+          behaviorType: "@zts/home-mail-room/scanner"
+          behaviorName: scanner
+          methodName: listIncoming
+          inputs:
+            run: ${{ run.id }}
+            batchSize: ${{ inputs.batchSize }}
+            maxBatches: ${{ inputs.maxBatches }}
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+    dependsOn: []
+    weight: 0
+  - name: scan
+    description: Read each batch with one load of the model
+    steps:
+      - name: batch-${{ self.batch.index }}
+        description: Read one batch and move its letters on
+        forEach:
+          item: batch
+          in: ${{ data.latest('scanner', 'incoming-' + run.id).attributes.batches }}
+        # One batch at a time: they all use the one model, and each holds
+        # the scanner while it reads.
+        concurrency: 1
+        task:
+          type: behavior
+          behaviorType: "@zts/home-mail-room/scanner"
+          behaviorName: scanner
+          methodName: scanBatch
+          inputs:
+            list: ${{ run.id }}
+            batch: ${{ self.batch.index }}
+            fraction: ${{ inputs.fraction }}
+        dependsOn: []
+        weight: 0
+        # A failed batch keeps its letters in Incoming for the next run.
+        allowFailure: true
+    dependsOn:
+      - job: list
+        condition:
+          type: succeeded
+    weight: 0
+  - name: file
+    description: File every letter waiting in ReadyToFile
+    steps:
+      - name: file-ready
+        task:
+          type: behavior
+          behaviorType: "@zts/home-mail-room/filer"
+          behaviorName: filer
+          methodName: fileReady
+        dependsOn: []
+        weight: 0
+        allowFailure: false
+    dependsOn:
+      - job: scan
+        condition:
+          type: completed
+    weight: 0
+version: 1

@@ -60,8 +60,8 @@ const ListArgsSchema = z.object({
   batchSize: z.number().int().min(1).default(20).describe(
     "Letters read with each load of the model",
   ),
-  maxBatches: z.number().int().min(1).optional().describe(
-    "Most batches to list; the rest of Incoming waits for the next run",
+  maxBatches: z.number().int().min(0).default(0).describe(
+    "Most batches to list, 0 for all; the rest of Incoming waits for the next run",
   ),
 });
 
@@ -493,7 +493,7 @@ export const behavior = {
         );
         const batches = [];
         for (let i = 0; i < pdfs.length; i += a.batchSize) {
-          if (a.maxBatches !== undefined && batches.length >= a.maxBatches) {
+          if (a.maxBatches > 0 && batches.length >= a.maxBatches) {
             break;
           }
           batches.push({
