@@ -79,6 +79,7 @@ Deno.test("runHelper runs the locked script, offline and with HF_HUB_OFFLINE whe
       "--offline",
       "--script",
       SCRIPT,
+      "--watch-stdin",
       "extract",
     ]);
     assertEquals(call.HF_HUB_OFFLINE, "1");
@@ -193,6 +194,8 @@ Deno.test("aborting the signal stops the helper", async () => {
   });
 });
 
+const REQUESTS = '[{"id": "0"}]\n';
+
 const LINES = [
   '{"type": "start", "loadMs": 5}',
   '{"type": "item", "id": "0", "rawOutput": "a"}',
@@ -207,7 +210,7 @@ Deno.test("runHelperLines returns every line of a run that succeeds", async () =
         settings(fake.uvPath),
         SCRIPT,
         ["extract-batch"],
-        { offline: true },
+        { offline: true, stdin: REQUESTS },
       );
       assertEquals(run.ok, true);
       assertEquals(run.error, null);
@@ -230,7 +233,7 @@ Deno.test("runHelperLines keeps the lines written before the helper died", async
         settings(fake.uvPath),
         SCRIPT,
         ["extract-batch"],
-        { offline: true, onStderr: (text) => seen.push(text) },
+        { offline: true, stdin: REQUESTS, onStderr: (text) => seen.push(text) },
       );
       assertEquals(run.ok, false);
       assertEquals(run.lines.length, 3);
@@ -253,7 +256,7 @@ Deno.test("runHelperLines drops a line the helper died part way through", async 
         settings(fake.uvPath),
         SCRIPT,
         ["extract-batch"],
-        { offline: true },
+        { offline: true, stdin: REQUESTS },
       );
       assertEquals(run.ok, false);
       assertEquals(run.lines.map((l) => l.id ?? l.type), ["start", "0", "1"]);
@@ -267,7 +270,7 @@ Deno.test("runHelperLines reports the helper's JSON error before its first line"
       settings(fake.uvPath),
       SCRIPT,
       ["extract-batch"],
-      { offline: true },
+      { offline: true, stdin: REQUESTS },
     );
     assertEquals(run.ok, false);
     assertEquals(run.lines, []);
@@ -284,12 +287,89 @@ Deno.test("runHelperLines tells uv failing before the helper started apart", asy
       settings(fake.uvPath),
       SCRIPT,
       ["extract-batch"],
-      { offline: true },
+      { offline: true, stdin: REQUESTS },
     );
     assertEquals(run.ok, false);
     assertStringIncludes(
       run.error!,
       "Python environment is missing or out of date; run install",
     );
+  });
+});
+
+/** Poll until condition holds or seconds pass; whether it held. */
+async function waitFor(condition: () => Promise<boolean>, seconds: number) {
+  const deadline = Date.now() + seconds * 1000;
+  while (Date.now() < deadline) {
+    if (await condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return await condition();
+}
+
+const exists = (path: string) => Deno.stat(path).then(() => true, () => false);
+
+Deno.test("the helper gets the stdin payload, and stdin stays open until the run ends", async () => {
+  await withFakeUv({ FAKE_UV_RUN: "hold" }, async (fake) => {
+    const pidFile = `${fake.dir}/helper.pid`;
+    Deno.env.set("FAKE_UV_PIDFILE", pidFile);
+    const controller = new AbortController();
+    try {
+      const run = runHelperLines(
+        { uvPath: fake.uvPath, signal: controller.signal },
+        SCRIPT,
+        ["extract-batch"],
+        { offline: true, stdin: '[{"id": "0"}]\n' },
+      );
+      assert(
+        await waitFor(() => exists(pidFile), 20),
+        "the fake never started",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assertEquals(await exists(`${pidFile}.eof`), false, "stdin closed early");
+      const [call] = await fakeUvCalls(fake);
+      assertEquals(call.requests, [{ id: "0" }]);
+      controller.abort();
+      await run.catch(() => {});
+    } finally {
+      Deno.env.delete("FAKE_UV_PIDFILE");
+    }
+  });
+});
+
+Deno.test("a large stdin payload to a uv that fails early reports uv's error", async () => {
+  await withFakeUv({ FAKE_UV_RUN: "uv-fail" }, async (fake) => {
+    const run = await runHelperLines(
+      settings(fake.uvPath),
+      SCRIPT,
+      ["extract-batch"],
+      { offline: true, stdin: `${"x".repeat(1 << 20)}\n` },
+    );
+    assertEquals(run.ok, false);
+    assertStringIncludes(
+      run.error!,
+      "Python environment is missing or out of date; run install",
+    );
+  });
+});
+
+Deno.test("stdin closes when uv exits, so a helper that outlived it stops too", async () => {
+  await withFakeUv({ FAKE_UV_RUN: "orphan" }, async (fake) => {
+    const pidFile = `${fake.dir}/helper.pid`;
+    Deno.env.set("FAKE_UV_PIDFILE", pidFile);
+    try {
+      const started = Date.now();
+      const run = await runHelperLines(
+        settings(fake.uvPath),
+        SCRIPT,
+        ["extract"],
+        { offline: true },
+      );
+      assertEquals(run.ok, false);
+      assert(Date.now() - started < 20_000);
+      assert(await waitFor(() => exists(`${pidFile}.eof`), 5));
+    } finally {
+      Deno.env.delete("FAKE_UV_PIDFILE");
+    }
   });
 });

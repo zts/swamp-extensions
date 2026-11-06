@@ -10,21 +10,36 @@
 # ///
 """Run Qianfan-OCR locally on one image, for the @zts/qianfan-ocr behavior.
 
+Usage: qianfan_ocr.py [--watch-stdin] SUBCOMMAND ...
+
 Subcommands print one JSON object on stdout; progress goes to stderr.
   install  [--model ID] [--revision SHA]
       Download the model at that revision into the Hugging Face cache, unless
       it is already there in full.
   extract  --image PATH --prompt TEXT [--model ID] [--revision SHA]
-           [--max-new-tokens N]
+           [--max-new-tokens N] [--batch-id ID] [--lock-timeout SECONDS]
       Read the image with the model. Never downloads: a model that is not
       fully cached is an error that says to run install.
-  extract-batch  --requests PATH [--model ID] [--revision SHA]
-      Read many images with one load of the model. PATH is a JSON list of
-      {"id", "image", "prompt", "maxNewTokens"}. Prints JSON lines instead of
+  extract-batch  [--model ID] [--revision SHA] [--batch-id ID]
+                 [--lock-timeout SECONDS]
+      Read many images with one load of the model. The first line of stdin is
+      a JSON list of {"id", "image", "prompt", "maxNewTokens"}; the caller
+      sends nothing more, and with --watch-stdin keeps stdin open until this
+      exits. Prints JSON lines instead of
       one object: {"type": "start", ...}, then one {"type": "item", "id", ...}
       per image as it finishes (with "error" for an image that failed), then
       {"type": "end", "count"}. Each line is flushed as it is written, so a
       crash keeps the items that finished. Never downloads, like extract.
+
+With --watch-stdin, the helper exits as soon as its stdin closes: the caller
+holds it open for the whole run, so a caller that dies, even by SIGKILL, takes
+the helper with it. uv run passes stdin through to this script.
+
+While it holds the model lock, the helper records itself in holder.json beside
+the lock: {"pid", "parentPid", "startedAt", "command", "batchId"}. A helper
+that is killed leaves the file behind, so it names the holder only while that
+PID is alive and a qianfan_ocr.py process. --batch-id is what it records as
+batchId; --lock-timeout gives up waiting for the lock after that many seconds.
 
 The first line on stderr is always STARTED, so the caller can tell a failure
 of this script from uv failing before it ran. A handled error prints
@@ -41,8 +56,11 @@ import fcntl
 import json
 import os
 import re
+import subprocess
 import sys
+import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 STARTED = "qianfan-ocr helper started"
@@ -87,12 +105,69 @@ def lock_path():
     return Path(cache) / "qianfan-ocr" / "model.lock"
 
 
+def is_helper_process(pid):
+    """Whether pid is a live process running qianfan_ocr.py, so a PID the OS
+    has since given to something else is never taken for a helper."""
+    result = subprocess.run(
+        ["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True
+    )
+    return result.returncode == 0 and "qianfan_ocr.py" in result.stdout
+
+
+def read_holder(path):
+    """The holder record beside the lock at path, or None."""
+    try:
+        holder = json.loads((Path(path).parent / "holder.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return holder if isinstance(holder, dict) else None
+
+
+def describe_holder(holder, is_helper):
+    """Who holds the lock, as far as a holder record that may be stale says."""
+    pid = holder.get("pid") if holder else None
+    if not isinstance(pid, int) or not is_helper(pid):
+        return "held by an unknown process"
+    return (
+        f"held by pid {pid} ({holder.get('command')} {holder.get('batchId')}, "
+        f"since {holder.get('startedAt')})"
+    )
+
+
+def write_holder(path, owner):
+    """Record this process as the lock's holder, atomically."""
+    holder = Path(path).parent / "holder.json"
+    record = {
+        "pid": os.getpid(),
+        "parentPid": os.getppid(),
+        "startedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+            "+00:00", "Z"
+        ),
+        "command": None,
+        "batchId": None,
+        **(owner or {}),
+    }
+    temp = holder.with_name(f"holder.json.{os.getpid()}.tmp")
+    temp.write_text(json.dumps(record))
+    os.replace(temp, holder)
+
+
+def remove_holder(path):
+    """Remove the holder record, but only while it still names this process:
+    the next holder may already have written its own."""
+    holder = read_holder(path)
+    if holder and holder.get("pid") == os.getpid():
+        (Path(path).parent / "holder.json").unlink(missing_ok=True)
+
+
 @contextlib.contextmanager
-def model_lock(path):
+def model_lock(path, owner=None, timeout=None, is_helper=is_helper_process):
     """Hold an exclusive lock on path; yields {"ms": time spent waiting}.
 
     One model load needs about 10GB of memory, so runs from any swamp instance
-    or repo on this machine load and generate one at a time.
+    or repo on this machine load and generate one at a time. While it waits,
+    it says who holds the lock; with timeout, it gives up after that many
+    seconds. Once it has the lock, it records owner in holder.json.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,12 +177,33 @@ def model_lock(path):
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print(f"waiting for the model lock {path}", file=sys.stderr, flush=True)
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            held_by = describe_holder(read_holder(path), is_helper)
+            print(
+                f"waiting for the model lock {path}, {held_by}",
+                file=sys.stderr,
+                flush=True,
+            )
+            if timeout is None:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            else:
+                while True:
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() - start >= timeout:
+                            held_by = describe_holder(read_holder(path), is_helper)
+                            raise HelperError(
+                                f"gave up after {timeout:g}s waiting for the model "
+                                f"lock {path}, {held_by}"
+                            ) from None
+                        time.sleep(0.2)
         waited["ms"] = int((time.monotonic() - start) * 1000)
         try:
+            write_holder(path, owner)
             yield waited
         finally:
+            remove_holder(path)
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
@@ -196,12 +292,13 @@ def generate_one(loaded, image, prompt, max_new_tokens):
     return raw, int((time.monotonic() - start) * 1000)
 
 
-def extract(image, prompt, model_id, revision, max_new_tokens):
+def extract(image, prompt, model_id, revision, max_new_tokens, batch_id=None, lock_timeout=None):
     if not Path(image).is_file():
         raise HelperError(f"image not found: {image}")
     path = cached_snapshot(model_id, revision)
 
-    with model_lock(lock_path()) as waited:
+    owner = {"command": "extract", "batchId": batch_id}
+    with model_lock(lock_path(), owner, lock_timeout) as waited:
         load_start = time.monotonic()
         loaded = load_model(path)
         load_ms = int((time.monotonic() - load_start) * 1000)
@@ -221,16 +318,16 @@ def extract(image, prompt, model_id, revision, max_new_tokens):
     }
 
 
-def read_requests(path):
-    """The validated list of extract-batch requests in the JSON file at path."""
+def read_requests(text):
+    """The validated list of extract-batch requests in text, a line of JSON."""
     try:
-        requests = json.loads(Path(path).read_text())
-    except (OSError, json.JSONDecodeError) as error:
-        raise HelperError(f"cannot read requests file {path}: {error}") from error
+        requests = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise HelperError(f"cannot read requests from stdin: {error}") from error
     if not isinstance(requests, list):
-        raise HelperError("requests file must hold a list of requests")
+        raise HelperError("requests must be a list of requests")
     if not requests:
-        raise HelperError("requests file must hold at least one request")
+        raise HelperError("requests must hold at least one request")
     seen = set()
     for request in requests:
         if not isinstance(request, dict):
@@ -244,7 +341,7 @@ def read_requests(path):
     return requests
 
 
-def extract_batch(requests, model_id, revision, emit):
+def extract_batch(requests, model_id, revision, emit, batch_id=None, lock_timeout=None):
     """Read every request with one load of the model, emitting a line per item.
 
     An image that is missing or fails to generate is reported on its own
@@ -253,7 +350,8 @@ def extract_batch(requests, model_id, revision, emit):
     """
     path = cached_snapshot(model_id, revision)
 
-    with model_lock(lock_path()) as waited:
+    owner = {"command": "extract-batch", "batchId": batch_id}
+    with model_lock(lock_path(), owner, lock_timeout) as waited:
         load_start = time.monotonic()
         loaded = load_model(path)
         emit(
@@ -291,6 +389,22 @@ def extract_batch(requests, model_id, revision, emit):
         emit({"type": "end", "count": len(requests)})
 
 
+def exit_when_stdin_closes():
+    """Exit the process, from a daemon thread, once stdin reaches EOF.
+
+    os._exit skips cleanup, but the kernel frees the model lock and memory
+    when the process ends; holder.json is left for readers to see is stale.
+    """
+
+    def watch():
+        while os.read(0, 4096):
+            pass
+        print("stdin closed: the caller has gone, stopping", file=sys.stderr, flush=True)
+        os._exit(1)
+
+    threading.Thread(target=watch, name="stdin-watch", daemon=True).start()
+
+
 def emit_line(obj):
     """Write one JSON line to stdout and flush it at once."""
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -299,6 +413,7 @@ def emit_line(obj):
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--watch-stdin", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
     i = sub.add_parser("install")
@@ -313,25 +428,45 @@ def build_parser():
     e.add_argument("--max-new-tokens", type=int, default=1024)
 
     b = sub.add_parser("extract-batch")
-    b.add_argument("--requests", required=True)
     b.add_argument("--model", default=DEFAULT_MODEL)
     b.add_argument("--revision", default=DEFAULT_REVISION)
+
+    for command in (e, b):
+        command.add_argument("--batch-id")
+        command.add_argument("--lock-timeout", type=float)
     return parser
 
 
 def main(argv=None):
     print(STARTED, file=sys.stderr, flush=True)
     args = build_parser().parse_args(argv)
+    # The requests come first, so the stdin watcher only ever sees the close.
+    requests_line = sys.stdin.buffer.readline() if args.command == "extract-batch" else b""
+    if args.watch_stdin:
+        exit_when_stdin_closes()
     try:
         if args.command == "install":
             result = install(args.model, args.revision)
         elif args.command == "extract-batch":
-            requests = read_requests(args.requests)
-            extract_batch(requests, args.model, args.revision, emit_line)
+            requests = read_requests(requests_line)
+            extract_batch(
+                requests,
+                args.model,
+                args.revision,
+                emit_line,
+                args.batch_id,
+                args.lock_timeout,
+            )
             return 0
         else:
             result = extract(
-                args.image, args.prompt, args.model, args.revision, args.max_new_tokens
+                args.image,
+                args.prompt,
+                args.model,
+                args.revision,
+                args.max_new_tokens,
+                args.batch_id,
+                args.lock_timeout,
             )
     except HelperError as error:
         json.dump({"error": str(error)}, sys.stdout)

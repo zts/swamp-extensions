@@ -13,7 +13,7 @@ export interface FakeUvCall {
   argv: string[];
   HF_HOME: string | null;
   HF_HUB_OFFLINE: string | null;
-  /** The parsed --requests file, when the call had one. */
+  /** The first line of stdin, parsed, for extract-batch. */
   requests: unknown;
 }
 

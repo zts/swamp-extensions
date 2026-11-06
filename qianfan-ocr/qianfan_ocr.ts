@@ -48,6 +48,10 @@ const InstallArgsSchema = z.object(ModelArgs);
 
 const NAME = /^[A-Za-z0-9_-]+$/;
 
+const lockTimeoutSeconds = z.number().positive().optional().describe(
+  "Give up after waiting this many seconds for another run's turn on the model; default wait as long as it takes",
+);
+
 const ExtractArgsSchema = z.object({
   imagePath: z.string().min(1).describe(
     "Image to read; absolute, or relative to the repository",
@@ -62,6 +66,7 @@ const ExtractArgsSchema = z.object({
   name: z.string().regex(NAME).optional().describe(
     "Name of the ocr resource, after ocr-; default the image file's stem",
   ),
+  lockTimeoutSeconds,
 });
 
 const ExtractBatchArgsSchema = z.object({
@@ -81,6 +86,7 @@ const ExtractBatchArgsSchema = z.object({
   name: z.string().regex(NAME).optional().describe(
     "Name of the batch resource, after batch-; default the time the batch started",
   ),
+  lockTimeoutSeconds,
 });
 
 const OcrSchema = z.object({
@@ -193,6 +199,11 @@ function batchName(at: Date): string {
   return at.toISOString().replace(/[:.]/g, "-");
 }
 
+/** The helper's --lock-timeout, when one was given. */
+function lockTimeoutArgs(seconds?: number): string[] {
+  return seconds === undefined ? [] : [`--lock-timeout=${seconds}`];
+}
+
 async function isFile(path: string): Promise<boolean> {
   try {
     return (await Deno.stat(path)).isFile;
@@ -295,6 +306,7 @@ export const behavior = {
           model: a.model,
           revision: a.revision,
         });
+        const name = instanceName(image, a.name);
         // Values go as --flag=value, so one starting with "-" stays a value.
         const result = await runHelper(
           uvSettings(context),
@@ -306,6 +318,8 @@ export const behavior = {
             `--model=${a.model}`,
             `--revision=${a.revision}`,
             `--max-new-tokens=${a.maxNewTokens}`,
+            `--batch-id=${name}`,
+            ...lockTimeoutArgs(a.lockTimeoutSeconds),
           ],
           { offline: true, onStderr: logHelper(context) },
         );
@@ -315,7 +329,7 @@ export const behavior = {
           : null;
         const handle = await context.writeResource(
           "ocr",
-          instanceName(image, a.name),
+          name,
           OcrSchema.parse({
             image,
             prompt: a.prompt,
@@ -356,6 +370,7 @@ export const behavior = {
       ) => {
         const a = ExtractBatchArgsSchema.parse(args);
         const started = new Date();
+        const batch = `batch-${a.name ?? batchName(started)}`;
         const items = a.items.map((item) => {
           const image = resolveImage(context.repoDir, item.imagePath);
           return {
@@ -402,39 +417,30 @@ export const behavior = {
             "Reading {count} images with {model}@{revision}",
             { count: sent.length, model: a.model, revision: a.revision },
           );
-          const tmpDir = await Deno.makeTempDir({ prefix: "qianfan-ocr-" });
-          let run;
-          try {
-            const requests = `${tmpDir}/requests.json`;
-            await Deno.writeTextFile(
-              requests,
-              JSON.stringify(sent.map((i) => ({
-                id: String(i),
-                image: items[i].image,
-                prompt: items[i].prompt,
-                maxNewTokens: a.maxNewTokens,
-              }))),
-            );
-            run = await runHelperLines(
-              uvSettings(context),
-              context.extensionFile(HELPER),
-              [
-                "extract-batch",
-                `--requests=${requests}`,
-                `--model=${a.model}`,
-                `--revision=${a.revision}`,
-              ],
-              { offline: true, onStderr: logHelper(context) },
-            );
-          } finally {
-            // A temp dir left behind must not hide what the helper read.
-            await Deno.remove(tmpDir, { recursive: true }).catch((error) =>
-              context.logger.warning(
-                "Could not remove the batch's temp dir {tmpDir}: {error}",
-                { tmpDir, error: String(error) },
-              )
-            );
-          }
+          // The requests go on stdin, one line, so nothing is left on disk
+          // when swamp dies part way.
+          const requests = JSON.stringify(sent.map((i) => ({
+            id: String(i),
+            image: items[i].image,
+            prompt: items[i].prompt,
+            maxNewTokens: a.maxNewTokens,
+          })));
+          const run = await runHelperLines(
+            uvSettings(context),
+            context.extensionFile(HELPER),
+            [
+              "extract-batch",
+              `--model=${a.model}`,
+              `--revision=${a.revision}`,
+              `--batch-id=${batch}`,
+              ...lockTimeoutArgs(a.lockTimeoutSeconds),
+            ],
+            {
+              offline: true,
+              onStderr: logHelper(context),
+              stdin: `${requests}\n`,
+            },
+          );
           const results = run.lines.filter((l) => l.type === "item");
           // Before any item, a failure leaves nothing to keep, as in extract.
           if (!run.ok && results.length === 0) throw new Error(run.error!);
@@ -506,7 +512,7 @@ export const behavior = {
 
         const count = (status: Outcome["status"]) =>
           outcomes.filter((o) => o.status === status).length;
-        const batch = BatchSchema.parse({
+        const batchRecord = BatchSchema.parse({
           model: a.model,
           revision: a.revision,
           device: start?.device ?? null,
@@ -523,26 +529,26 @@ export const behavior = {
         });
         const batchHandle = await context.writeResource(
           "batch",
-          `batch-${a.name ?? batchName(started)}`,
           batch,
+          batchRecord,
         );
         handles.push(batchHandle);
         context.logger.info(
           "Wrote {name}: {succeeded} read, {failed} failed, {notRun} not run",
           {
             name: batchHandle.name,
-            succeeded: batch.succeeded,
-            failed: batch.failed,
-            notRun: batch.notRun,
+            succeeded: batchRecord.succeeded,
+            failed: batchRecord.failed,
+            notRun: batchRecord.notRun,
           },
         );
-        if (batch.succeeded === 0) {
+        if (batchRecord.succeeded === 0) {
           context.logger.warning(
             "No item in {name} was read: {failed} failed, {notRun} not run",
             {
               name: batchHandle.name,
-              failed: batch.failed,
-              notRun: batch.notRun,
+              failed: batchRecord.failed,
+              notRun: batchRecord.notRun,
             },
           );
         }
