@@ -132,9 +132,8 @@ but like all helper output it shows up only once the run ends.
 ### A helper left running: `stop`
 
 The helper exits when the swamp process that started it goes away, even by
-`kill -9`, so normally nothing is left behind. If one is still running, or a run
-waits on the model lock and you want to know why, `stop` finds the helper that
-holds the lock and stops it:
+`kill -9`, so normally nothing is left behind. If one is still running and
+holding the model lock, `stop` finds it and kills it:
 
 ```sh
 swamp behavior run ocr stop
