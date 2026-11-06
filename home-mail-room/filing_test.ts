@@ -5,6 +5,7 @@ import {
   filenameProblem,
   matchSender,
   parseLetterDate,
+  senderName,
 } from "./filing.ts";
 
 Deno.test("parseLetterDate reads the shapes letters use, day first", () => {
@@ -80,4 +81,30 @@ Deno.test("matchSender finds the cabinet folder whatever the case or spacing", (
   assertEquals(matchSender(" HALIFAX BANK", folders), "Halifax Bank");
   assertEquals(matchSender("Halifax", folders), null);
   assertEquals(matchSender("", folders), null);
+});
+
+Deno.test("senderName title-cases a sender read all in capitals or all in lower case", () => {
+  const cases: [string, string][] = [
+    ["LONDON BOROUGH OF HACKNEY", "London Borough Of Hackney"],
+    ["BLACK KATZ N1 LETTINGS & PROPERTY", "Black Katz N1 Lettings & Property"],
+    ["ROYAL-MAIL", "Royal-Mail"],
+    ["thames water", "Thames Water"],
+    ["bt", "Bt"],
+    ["andrews & arnold ltd.", "Andrews & Arnold Ltd."],
+  ];
+  for (const [raw, want] of cases) assertEquals(senderName(raw), want, raw);
+});
+
+Deno.test("senderName keeps mixed case, and capitals of under five letters", () => {
+  const cases = [
+    "HM Revenue & Customs",
+    "Post Office Ltd.",
+    "eBay",
+    "HMRC",
+    "EDF",
+    "O2 UK",
+    "",
+    "123",
+  ];
+  for (const raw of cases) assertEquals(senderName(raw), raw, raw);
 });

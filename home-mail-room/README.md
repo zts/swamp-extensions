@@ -133,6 +133,11 @@ destination is taken is held as a conflict. Everything it cannot file is held
 for you, in `ReadyToFile`, with the reasons. Dates are read day first, as UK
 post writes them.
 
+A sender matches a folder whatever its case or spacing. The sender proposed for
+a held letter is title-cased when it was read all in capitals (five letters or
+more, so initials such as HMRC stay) or all in lower case; mixed case is kept as
+read. `LONDON BOROUGH OF HACKNEY` is proposed as `London Borough Of Hackney`.
+
 At the end of the run, the `@zts/home-mail-room/run-summary` report shows what
 happened to each letter: read, read before, sent to `Failed` or left in
 `Incoming`, then filed, held for review and why, or archived as a copy of a

@@ -20,6 +20,7 @@ import {
   type FilingFields,
   matchSender,
   parseLetterDate,
+  senderName,
 } from "./filing.ts";
 import {
   fileHash,
@@ -239,9 +240,10 @@ function review(
   }
   const rawSender = typeof details.sender === "string" ? details.sender : "";
   const folder = matchSender(rawSender, folders);
-  if (!cleanSegment(rawSender)) reasons.push("No sender was read");
+  const sender = senderName(cleanSegment(rawSender));
+  if (!sender) reasons.push("No sender was read");
   else if (!folder) {
-    reasons.push(`No FileCabinet folder for the sender "${rawSender}"`);
+    reasons.push(`No FileCabinet folder for the sender "${sender}"`);
   }
   const rawDate = typeof details.date === "string" ? details.date : "";
   const date = parseLetterDate(rawDate) ?? "";
@@ -253,7 +255,7 @@ function review(
   if (!type.success) reasons.push("No document type was read");
   return {
     proposal: {
-      sender: folder ?? cleanSegment(rawSender),
+      sender: folder ?? sender,
       date,
       documentType: type.success ? type.data : "other",
       title: "",

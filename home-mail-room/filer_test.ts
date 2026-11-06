@@ -217,6 +217,22 @@ test("fileReady holds a letter whose sender has no cabinet folder, leaving it in
   assertEquals(s.files.has(letter.id.replace("letter-", "header-")), true);
 });
 
+test("fileReady proposes a sender read in capitals in title case", async () => {
+  const s = await setup([]);
+  const letter = await s.addLetter("a.pdf", {
+    sender: "LONDON BOROUGH OF HACKNEY",
+  });
+  await s.fileReady();
+  const record = s.stored.get(letter.id)!;
+  assertEquals(
+    (record.proposal as Record<string, unknown>).sender,
+    "London Borough Of Hackney",
+  );
+  assertEquals(record.reasons, [
+    'No FileCabinet folder for the sender "London Borough Of Hackney"',
+  ]);
+});
+
 test("fileReady holds a letter it could not read a date or type from", async () => {
   const s = await setup();
   const letter = await s.addLetter("a.pdf", {

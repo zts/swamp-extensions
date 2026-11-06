@@ -88,6 +88,23 @@ export function filenameProblem(name: string): string | null {
   return null;
 }
 
+/**
+ * A sender as it should be written. OCR copies letterheads set in capitals,
+ * so a sender read all in capitals is title-cased, as is one all in lower
+ * case. Capitals of under five letters are kept, as likely initials (HMRC,
+ * EDF), and so is mixed case, which is taken to be how the sender writes it.
+ */
+export function senderName(raw: string): string {
+  const upper = raw.match(/\p{Lu}/gu)?.length ?? 0;
+  const lower = raw.match(/\p{Ll}/gu)?.length ?? 0;
+  if (upper > 0 && lower > 0) return raw;
+  if (lower === 0 && upper < 5) return raw;
+  return raw.toLowerCase().replace(
+    /(^|[\s\-/(&])(\p{Ll})/gu,
+    (_, before: string, letter: string) => before + letter.toUpperCase(),
+  );
+}
+
 /** Key a sender is compared by: cleaned, case and spacing ignored. */
 function senderKey(name: string): string {
   return cleanSegment(name).toLowerCase();
