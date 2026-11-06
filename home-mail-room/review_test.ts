@@ -1,6 +1,11 @@
 import { assertEquals } from "jsr:@std/assert@1.0.19";
 import { createModelTestContext } from "jsr:@swamp-club/swamp-testing@0.20261023.61";
-import { behavior, handler } from "./review.ts";
+import {
+  behavior,
+  type CommandOutput,
+  handler,
+  runFilerMethod,
+} from "./review.ts";
 import { PAGE_HTML } from "./review_page.ts";
 import { type Decision, type Letter, Store } from "./review_store.ts";
 
@@ -236,4 +241,34 @@ Deno.test("a JSON POST is accepted whatever its case and parameters", async () =
   });
   assertEquals(res.status, 200);
   assertEquals(renamed, [[[NAME], "Thames"]]);
+});
+
+/** A command runner that records each call and answers with out. */
+function fakeSwamp(out: Partial<CommandOutput> | Error = {}) {
+  const calls: { command: string; args: string[]; cwd: string }[] = [];
+  const run = (command: string, args: string[], cwd: string) => {
+    calls.push({ command, args, cwd });
+    if (out instanceof Error) return Promise.reject(out);
+    const none = new Uint8Array();
+    return Promise.resolve({ code: 0, stdout: none, stderr: none, ...out });
+  };
+  return { calls, run };
+}
+
+Deno.test("a person's text reaches the filer verbatim, as one literal input", async () => {
+  const swamp = fakeSwamp();
+  const sender = `O'Brien "&" \${{ inputs.x }} @/etc/passwd \\n`;
+  await runFilerMethod("/repo", "filer", "renameSender", {
+    letters: [NAME],
+    sender,
+  }, swamp.run);
+
+  assertEquals(swamp.calls.length, 1);
+  const { command, args, cwd } = swamp.calls[0];
+  assertEquals([command, cwd], ["swamp", "/repo"]);
+  const input = args.indexOf("--input");
+  assertEquals(args.slice(0, 4), ["behavior", "run", "filer", "renameSender"]);
+  assertEquals(args.includes("--literal-inputs"), true);
+  assertEquals(args.length, 8);
+  assertEquals(JSON.parse(args[input + 1]), { letters: [NAME], sender });
 });

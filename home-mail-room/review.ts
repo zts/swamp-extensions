@@ -250,6 +250,64 @@ function swampError(out: string): string {
   }
 }
 
+/** What a command gave back once it ended. */
+export interface CommandOutput {
+  code: number;
+  stdout: Uint8Array;
+  stderr: Uint8Array;
+}
+
+/** Runs a command in a folder to its end; tests give their own. */
+export type CommandRunner = (
+  command: string,
+  args: string[],
+  cwd: string,
+) => Promise<CommandOutput>;
+
+const runCommand: CommandRunner = (command, args, cwd) =>
+  // The review page exists to send a person's decisions to the filer, and
+  // swamp is how it does: runModel allows only 100 calls per method run.
+  // The argv is fixed but for validated names and one JSON input that
+  // --literal-inputs keeps from being read as an expression or @file.
+  // swamp-quality-ignore deno-command
+  new Deno.Command(command, {
+    args,
+    cwd,
+    stdin: "null",
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+
+/**
+ * Runs one of the filer's methods through the swamp CLI, in the repository,
+ * and throws what swamp said when it fails.
+ */
+export async function runFilerMethod(
+  repoDir: string,
+  filer: string,
+  method: string,
+  input: Record<string, unknown>,
+  run: CommandRunner = runCommand,
+): Promise<void> {
+  const { code, stdout, stderr } = await run("swamp", [
+    "behavior",
+    "run",
+    filer,
+    method,
+    // A person's text is data, never an expression or an @file.
+    "--literal-inputs",
+    "--input",
+    JSON.stringify(input),
+    "--json",
+  ], repoDir);
+  if (code !== 0) {
+    const text = new TextDecoder();
+    throw new Error(
+      swampError(`${text.decode(stderr)}\n${text.decode(stdout)}`),
+    );
+  }
+}
+
 /** The @zts/home-mail-room/review behavior. */
 export const behavior = {
   type: "@zts/home-mail-room/review",
@@ -283,33 +341,8 @@ export const behavior = {
           );
         };
         // Through the CLI: runModel allows 100 calls per method run.
-        const runFiler = async (
-          method: string,
-          input: Record<string, unknown>,
-        ): Promise<void> => {
-          const { code, stdout, stderr } = await new Deno.Command("swamp", {
-            args: [
-              "behavior",
-              "run",
-              filer,
-              method,
-              // A person's text is data, never an expression or an @file.
-              "--literal-inputs",
-              "--input",
-              JSON.stringify(input),
-              "--json",
-            ],
-            cwd: context.repoDir,
-            stdout: "piped",
-            stderr: "piped",
-          }).output();
-          if (code !== 0) {
-            const text = new TextDecoder();
-            throw new Error(
-              swampError(`${text.decode(stderr)}\n${text.decode(stdout)}`),
-            );
-          }
-        };
+        const runFiler = (method: string, input: Record<string, unknown>) =>
+          runFilerMethod(context.repoDir, filer, method, input);
         const run = (decisions: Decision[]) =>
           runFiler("decide", { decisions });
         const rename = (letters: string[], sender: string) =>
