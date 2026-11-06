@@ -384,6 +384,21 @@ Deno.test("scanBatch does not read a letter again that was read before; it moves
   });
 });
 
+Deno.test("scanBatch names each letter it did not read again, and when it was read", async () => {
+  await withRepo(async (repoDir) => {
+    await Deno.writeFile(incoming(repoDir, "again.pdf"), SAMPLE);
+    const readAt = "2026-11-06T15:23:22.983Z";
+    const { summary, logs } = await scan(repoDir, fakeQianfan(), {}, {
+      stored: {
+        [`details-${SHORT}`]: { contentHash: HASH, scannedAt: readAt },
+      },
+    });
+    assertEquals(summary.letters[0].readBefore, readAt);
+    assertStringIncludes(logs, "again.pdf");
+    assertStringIncludes(logs, readAt);
+  });
+});
+
 Deno.test("scanBatch reads two copies of a letter once and moves both", async () => {
   await withRepo(async (repoDir) => {
     await Deno.writeFile(incoming(repoDir, "a.pdf"), SAMPLE);

@@ -55,6 +55,8 @@ interface ScanBatch {
     status: "read" | "known" | "unreadable" | "gone" | "notRun" | "error";
     fullPage: boolean;
     error: string | null;
+    /** When a known letter was read; absent from records before it. */
+    readBefore?: string | null;
   }[];
   error: string | null;
 }
@@ -196,8 +198,13 @@ export const report = {
           letter: baseName(l.path),
           status: l.status,
           result: SCANNED[l.status],
-          notes: [l.fullPage ? "read the whole page" : "", l.error ?? ""]
-            .filter(Boolean).join("; "),
+          notes: [
+            l.status === "known"
+              ? `not read again; read at ${l.readBefore ?? "an unknown time"}`
+              : "",
+            l.fullPage ? "read the whole page" : "",
+            l.error ?? "",
+          ].filter(Boolean).join("; "),
         });
       }
     }
@@ -241,6 +248,10 @@ export const report = {
           scanned.unreadable ?? 0
         } to Failed, ${left} left in Incoming.`,
       );
+      const known = scanRows.filter((r) => r.status === "known");
+      if (known.length) {
+        lines.push(`Not read again: ${known.map((r) => r.letter).join(", ")}.`);
+      }
     }
     if (list?.waiting) {
       lines.push(`${plural(list.waiting, "letter")} wait for a later run.`);

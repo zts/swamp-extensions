@@ -151,6 +151,9 @@ const ScanBatchSchema = z.object({
     ),
     fullPage: z.boolean().describe("Whether the whole page was read too"),
     details: z.string().nullable(),
+    readBefore: z.string().nullable().describe(
+      "When a known letter was read, by an earlier batch",
+    ),
     movedTo: z.string().nullable(),
     error: z.string().nullable(),
   })),
@@ -558,6 +561,7 @@ export const behavior = {
             status,
             fullPage: false,
             details: null,
+            readBefore: null,
             movedTo: null,
             error,
           };
@@ -588,6 +592,7 @@ export const behavior = {
           if (known) {
             o.status = "known";
             o.details = `details-${shortHash(hash)}`;
+            o.readBefore = str(known.scannedAt);
             continue;
           }
           byHash.set(hash, [...(byHash.get(hash) ?? []), o]);
@@ -767,6 +772,17 @@ export const behavior = {
             left: count("notRun") + count("error"),
           },
         );
+        for (const o of outcomes.filter((o) => o.status === "known")) {
+          context.logger.info(
+            "Batch {batch}: not reading {letter} again; it was read at {readBefore} ({details})",
+            {
+              batch: a.batch,
+              letter: o.path.slice(o.path.lastIndexOf("/") + 1),
+              readBefore: o.readBefore ?? "an unknown time",
+              details: o.details,
+            },
+          );
+        }
         if (failure) throw new Error(failure);
         const stuck = outcomes.filter((o) => o.status === "error");
         if (stuck.length > 0) {

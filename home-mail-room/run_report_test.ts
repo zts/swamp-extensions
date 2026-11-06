@@ -148,6 +148,21 @@ Deno.test("a run's summary counts what was read and filed, and lists each letter
   assertEquals(result.json.filed.counts, { filed: 1, held: 1 });
 });
 
+Deno.test("a run names the letters it did not read again, and when they were read", async () => {
+  const batch = scanned([["a.pdf", "read"], ["b.pdf", "known"]]);
+  Object.assign(batch.letters[1], { readBefore: "2026-11-06T15:23:22.983Z" });
+  const result = await report.execute(context({
+    ...list(["a.pdf", "b.pdf"]),
+    [`scan-batch-${RUN}-0`]: batch,
+  }, { scan: ["succeeded"], file: null }));
+
+  assertStringIncludes(result.markdown, "Not read again: b.pdf.");
+  assertStringIncludes(
+    result.markdown,
+    "| b.pdf | Read before, to ReadyToFile | not read again; read at 2026-11-06T15:23:22.983Z |",
+  );
+});
+
 Deno.test("a batch the model could not read leaves its letters in Incoming, with the error", async () => {
   const result = await report.execute(context({
     ...list(["a.pdf"]),

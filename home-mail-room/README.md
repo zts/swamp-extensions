@@ -111,7 +111,10 @@ read as `details-<short hash>` and the image it read from as
 
 The details are written before the letter moves, so a run that stops between the
 two reads the letter again next time, and no worse. `scan-batch-<run>-<n>`
-records what happened to each letter in a batch.
+records what happened to each letter in a batch. A letter read before keeps its
+old details, from whenever it was read: the log and the run-summary name each
+one and when it was read. To read one again, delete its `details-<short hash>`
+first.
 
 The filer then reviews each letter in `ReadyToFile`. It files a letter whose
 sender matches a cabinet folder and whose date and document type were read:
