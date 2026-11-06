@@ -120,6 +120,16 @@ function foreign(req: Request, port: number): string | null {
 }
 
 /**
+ * Whether a request's body is JSON, by its media type alone. A web page can
+ * send another site a form or text/plain POST without asking first, but
+ * not an application/json one.
+ */
+function isJson(req: Request): boolean {
+  const type = req.headers.get("content-type") ?? "";
+  return type.split(";")[0].trim().toLowerCase() === "application/json";
+}
+
+/**
  * The page's requests, answered from the store and the header images. A
  * rename goes to the filer once the decisions before it have. port is the
  * one the server listens on, which is known only once it does.
@@ -138,6 +148,9 @@ export function handler(
   return async (req) => {
     const refused = foreign(req, port());
     if (refused) return json({ error: refused }, 403);
+    if (req.method === "POST" && !isJson(req)) {
+      return json({ error: "Send application/json" }, 415);
+    }
     const url = new URL(req.url);
     const parts = url.pathname.split("/").filter(Boolean);
 

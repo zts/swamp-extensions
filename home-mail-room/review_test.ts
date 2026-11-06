@@ -207,3 +207,33 @@ Deno.test("serve on port 0 answers the page at the port it was given", async () 
     await served;
   }
 });
+
+Deno.test("a POST that is not JSON is refused before it reaches the filer", async () => {
+  const { post, renamed } = await setup([held()]);
+  // A cross-origin form or text/plain POST needs no preflight.
+  for (
+    const headers of [
+      { "content-type": "text/plain" },
+      { "content-type": "application/x-www-form-urlencoded" },
+      { "content-type": "application/jsonx" },
+      {} as Record<string, string>,
+    ]
+  ) {
+    const res = await post(
+      "/api/rename",
+      { names: [NAME], sender: "Mallory" },
+      headers,
+    );
+    assertEquals(res.status, 415, JSON.stringify(headers));
+  }
+  assertEquals(renamed, []);
+});
+
+Deno.test("a JSON POST is accepted whatever its case and parameters", async () => {
+  const { post, renamed } = await setup([held()]);
+  const res = await post("/api/rename", { names: [NAME], sender: "Thames" }, {
+    "content-type": "Application/JSON ; charset=utf-8",
+  });
+  assertEquals(res.status, 200);
+  assertEquals(renamed, [[[NAME], "Thames"]]);
+});
