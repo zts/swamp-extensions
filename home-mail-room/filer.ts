@@ -9,6 +9,10 @@
  * letter moves to Skipped. The folder a letter is in is the truth: a letter
  * put back into ReadyToFile is reviewed again.
  *
+ * A sender is proposed under the name the cabinet's senders.yaml gives it,
+ * if any; renameSender adds to that list and re-reviews the open letters
+ * from that sender.
+ *
  * @module
  */
 import { z } from "npm:zod@4.6.7";
@@ -20,6 +24,7 @@ import {
   type FilingFields,
   matchSender,
   parseLetterDate,
+  senderKey,
   senderName,
 } from "./filing.ts";
 import {
@@ -32,6 +37,7 @@ import {
   resolve,
   shortHash,
 } from "./inbound.ts";
+import { addSenderNames, readSenderNames } from "./senders.ts";
 
 const NAME = /^[A-Za-z0-9_-]+$/;
 
@@ -67,6 +73,13 @@ const DecisionSchema = z.object({
 
 const DecideArgsSchema = z.object({
   decisions: z.array(DecisionSchema).min(1),
+});
+
+const RenameArgsSchema = z.object({
+  letters: z.array(z.string().regex(/^letter-[0-9a-f]{16}$/)).min(1).describe(
+    "Letters whose sender is renamed, with every open letter whose sender was read the same way",
+  ),
+  sender: z.string().describe("How the sender is written from now on"),
 });
 
 /** The states a person may still decide a letter in. */
@@ -114,7 +127,7 @@ const OUTCOMES = [
 
 /** What one fileReady or decide run did to each letter it looked at. */
 export const RunSchema = z.object({
-  method: z.enum(["fileReady", "decide"]),
+  method: z.enum(["fileReady", "decide", "renameSender"]),
   letters: z.array(z.object({
     letter: z.string(),
     originalName: z.string().describe("The file's name in ReadyToFile"),
@@ -229,18 +242,27 @@ async function cabinetFolders(cabinetDir: string): Promise<string[]> {
   return folders;
 }
 
-/** How to file a letter, and why it cannot be filed without a person. */
+/** The sender as read off a letter, cleaned; empty when none was read. */
+function readSender(details: Record<string, unknown>): string {
+  return cleanSegment(typeof details.sender === "string" ? details.sender : "");
+}
+
+/**
+ * How to file a letter, and why it cannot be filed without a person. A
+ * sender the cabinet renames is proposed as written there.
+ */
 function review(
   details: Record<string, unknown>,
   folders: string[],
+  renames: Map<string, string>,
 ): { proposal: Proposal; reasons: string[] } {
   const reasons: string[] = [];
   if (details.parsedOk === false) {
     reasons.push("The OCR answer was not readable");
   }
-  const rawSender = typeof details.sender === "string" ? details.sender : "";
-  const folder = matchSender(rawSender, folders);
-  const sender = senderName(cleanSegment(rawSender));
+  const rawSender = readSender(details);
+  const sender = renames.get(senderKey(rawSender)) ?? senderName(rawSender);
+  const folder = matchSender(sender, folders);
   if (!sender) reasons.push("No sender was read");
   else if (!folder) {
     reasons.push(`No FileCabinet folder for the sender "${sender}"`);
@@ -480,6 +502,7 @@ export const behavior = {
         const inbound = resolve(context.repoDir, g.inboundDir);
         const cabinetDir = resolve(context.repoDir, g.cabinetDir);
         const folders = await cabinetFolders(cabinetDir);
+        const renames = await readSenderNames(cabinetDir);
         const ready = await pdfsIn(
           folder(inbound, "readyToFile"),
           (m, p) => context.logger.warning(m, p),
@@ -519,17 +542,19 @@ export const behavior = {
 
           const scan = scanned.get(pdf.hash)!;
           const details = scan.details?.attributes ?? existing?.extracted;
-          const { proposal, reasons } = details ? review(details, folders) : {
-            proposal: {
-              sender: "",
-              date: "",
-              documentType: "other" as const,
-              title: "",
-            },
-            reasons: [
-              "Nothing was read off this letter; put it back in Incoming to read it",
-            ],
-          };
+          const { proposal, reasons } = details
+            ? review(details, folders, renames)
+            : {
+              proposal: {
+                sender: "",
+                date: "",
+                documentType: "other" as const,
+                title: "",
+              },
+              reasons: [
+                "Nothing was read off this letter; put it back in Incoming to read it",
+              ],
+            };
           const header = scan.header?.modelId && scan.header.modelType
             ? await context.dataRepository.getContent(
               scan.header.modelType,
@@ -669,6 +694,72 @@ export const behavior = {
         handles.push(
           await context.writeResource("run", "decisions", {
             method: "decide",
+            letters: outcomes,
+            finishedAt: new Date().toISOString(),
+          }),
+        );
+        return { dataHandles: handles };
+      },
+    },
+    renameSender: {
+      description:
+        "Rename the sender of letters, remember it in the cabinet's senders.yaml, and re-review every open letter from that sender",
+      arguments: RenameArgsSchema,
+      execute: async (
+        args: z.input<typeof RenameArgsSchema>,
+        context: Context,
+      ) => {
+        const a = RenameArgsSchema.parse(args);
+        const sender = cleanSegment(a.sender);
+        if (!sender) throw new Error("The sender's name cannot be empty");
+        const g = GlobalArgsSchema.parse(context.globalArgs);
+        const cabinetDir = resolve(context.repoDir, g.cabinetDir);
+        const open = (await letters(context)).filter((l) =>
+          OPEN.has(l.state) && !l.decision
+        );
+        const given = open.filter((l) =>
+          a.letters.includes(letterId(l.contentHash))
+        );
+        // Each way the sender was read is renamed; a letter with none read
+        // only takes the name.
+        const read = [...new Set(given.map((l) => readSender(l.extracted)))]
+          .filter(Boolean);
+        if (read.length > 0) {
+          await addSenderNames(
+            cabinetDir,
+            Object.fromEntries(read.map((r) => [r, sender])),
+          );
+        }
+        const keys = new Set(read.map(senderKey));
+        const renames = await readSenderNames(cabinetDir);
+        const folders = await cabinetFolders(cabinetDir);
+        const handles: DataHandle[] = [];
+        const outcomes: Outcome[] = [];
+        for (const letter of open) {
+          const raw = readSender(letter.extracted);
+          const isGiven = given.includes(letter);
+          if (!(raw ? keys.has(senderKey(raw)) : isGiven)) continue;
+          const details = raw
+            ? letter.extracted
+            : { ...letter.extracted, sender };
+          const after: Letter = {
+            ...letter,
+            state: "held",
+            ...review(details, folders, renames),
+          };
+          handles.push(...await save(context, g, after));
+          outcomes.push(outcomeOf(after, "person"));
+        }
+        context.logger.info(
+          "Renamed the sender of {count} letters to {sender}",
+          {
+            count: outcomes.length,
+            sender,
+          },
+        );
+        handles.push(
+          await context.writeResource("run", "renames", {
+            method: "renameSender",
             letters: outcomes,
             finishedAt: new Date().toISOString(),
           }),

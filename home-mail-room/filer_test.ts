@@ -1,6 +1,7 @@
-import { assertEquals } from "jsr:@std/assert@1.0.19";
+import { assertEquals, assertRejects } from "jsr:@std/assert@1.0.19";
 import { behavior } from "./filer.ts";
 import { contentHash } from "./inbound.ts";
+import { readSenderNames, SENDERS_FILE } from "./senders.ts";
 
 interface ScannerRecord {
   name: string;
@@ -158,6 +159,10 @@ async function setup(folders: string[] = ["Thames Water"]) {
     thisRun.clear();
     return methods.decide.execute({ decisions }, context);
   };
+  const renameSender = (letters: string[], sender: string) => {
+    thisRun.clear();
+    return methods.renameSender.execute({ letters, sender }, context);
+  };
 
   return {
     repoDir,
@@ -168,6 +173,7 @@ async function setup(folders: string[] = ["Thames Water"]) {
     addLetter,
     fileReady,
     decide,
+    renameSender,
   };
 }
 
@@ -597,4 +603,73 @@ test("decide records a skipped letter", async () => {
   await s.fileReady();
   await s.decide([{ letter: letter.id, action: "skip" }]);
   assertEquals(outcomes(s, "decisions").map((o) => o.outcome), ["skipped"]);
+});
+
+const DXW = "The Dextrous Web Ltd, trading as dxw digital";
+
+test("fileReady files a sender under the name senders.yaml gives it, as written there", async () => {
+  const s = await setup(["dxw digital"]);
+  await Deno.writeTextFile(
+    `${s.repoDir}/FileCabinet/${SENDERS_FILE}`,
+    `'${DXW.toUpperCase()}': dxw digital\n`,
+  );
+  const letter = await s.addLetter("a.pdf", { sender: DXW });
+  await s.fileReady();
+  const record = s.stored.get(letter.id)!;
+  assertEquals(record.state, "filed");
+  assertEquals(
+    record.destination,
+    `${s.repoDir}/FileCabinet/dxw digital/2023-05-18 dxw digital bill.pdf`,
+  );
+});
+
+test("renameSender renames every open letter whose sender was read the same way, and remembers it", async () => {
+  const s = await setup([]);
+  const a = await s.addLetter("a.pdf", { sender: "EDF ENERGY" }, "one");
+  const b = await s.addLetter("b.pdf", { sender: "edf  energy" }, "two");
+  const c = await s.addLetter("c.pdf", {}, "three");
+  await s.fileReady();
+  await s.renameSender([a.id], "EDF Energy");
+  const proposed = (id: string) =>
+    (s.stored.get(id)!.proposal as Record<string, unknown>).sender;
+  assertEquals([proposed(a.id), proposed(b.id), proposed(c.id)], [
+    "EDF Energy",
+    "EDF Energy",
+    "Thames Water",
+  ]);
+  assertEquals(s.stored.get(b.id)!.reasons, [
+    'No FileCabinet folder for the sender "EDF Energy"',
+  ]);
+  const names = await readSenderNames(`${s.repoDir}/FileCabinet`);
+  assertEquals(Object.fromEntries(names), { "edf energy": "EDF Energy" });
+});
+
+test("a letter renamed to a cabinet folder's sender is filed by the next fileReady", async () => {
+  const s = await setup(["dxw digital"]);
+  const letter = await s.addLetter("a.pdf", { sender: DXW });
+  await s.fileReady();
+  await s.renameSender([letter.id], "dxw digital");
+  assertEquals(s.stored.get(letter.id)!.state, "held");
+  assertEquals(s.stored.get(letter.id)!.reasons, []);
+  await s.fileReady();
+  assertEquals(s.stored.get(letter.id)!.state, "filed");
+});
+
+test("renameSender gives a letter with no sender read the name, without remembering it", async () => {
+  const s = await setup([]);
+  const letter = await s.addLetter("a.pdf", { sender: null });
+  await s.fileReady();
+  await s.renameSender([letter.id], "Acme");
+  assertEquals(
+    (s.stored.get(letter.id)!.proposal as Record<string, unknown>).sender,
+    "Acme",
+  );
+  assertEquals((await readSenderNames(`${s.repoDir}/FileCabinet`)).size, 0);
+});
+
+test("renameSender refuses an empty name", async () => {
+  const s = await setup([]);
+  const letter = await s.addLetter("a.pdf");
+  await s.fileReady();
+  await assertRejects(() => s.renameSender([letter.id], "  "), Error, "name");
 });

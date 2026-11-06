@@ -32,9 +32,20 @@ async function setup(letters: Letter[]) {
     () => Promise.resolve(letters),
   );
   await store.refresh();
-  const handle = handler(store, new Map());
+  const renamed: [string[], string][] = [];
+  const handle = handler(store, new Map(), (names, sender) => {
+    renamed.push([names, sender]);
+    return Promise.resolve();
+  });
   const get = (path: string) => handle(new Request(`http://x${path}`));
-  return { store, handle, get, sent };
+  const post = (path: string, body: unknown) =>
+    handle(
+      new Request(`http://x${path}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    );
+  return { store, handle, get, post, sent, renamed };
 }
 
 Deno.test("the page served is the one in review/index.html", async () => {
@@ -93,4 +104,21 @@ Deno.test("the letter's PDF is served from wherever it is now", async () => {
 Deno.test("an unknown letter is not found", async () => {
   const { get } = await setup([]);
   assertEquals((await get(`/api/letters/${NAME}/pdf`)).status, 404);
+});
+
+Deno.test("rename asks the filer to rename the letters' sender", async () => {
+  const { post, renamed } = await setup([held()]);
+  const res = await post("/api/rename", {
+    names: [NAME],
+    sender: "Thames Water Utilities",
+  });
+  assertEquals(res.status, 200);
+  assertEquals(renamed, [[[NAME], "Thames Water Utilities"]]);
+});
+
+Deno.test("rename refuses an empty name without asking the filer", async () => {
+  const { post, renamed } = await setup([held()]);
+  const res = await post("/api/rename", { names: [NAME], sender: " " });
+  assertEquals(res.status, 422);
+  assertEquals(renamed, []);
 });

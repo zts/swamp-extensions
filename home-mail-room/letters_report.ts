@@ -91,7 +91,7 @@ export const report = {
   labels: ["mail"],
   execute: async (context: Context) => {
     const handle = context.dataHandles.find((h) =>
-      h.name === "file-ready" || h.name === "decisions"
+      h.name === "file-ready" || h.name === "decisions" || h.name === "renames"
     );
     const run = handle
       ? await read<Run>(context, handle.name, handle.version)

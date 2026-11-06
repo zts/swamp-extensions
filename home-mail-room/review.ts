@@ -94,10 +94,14 @@ async function pdf(paths: unknown[]): Promise<Response> {
   return json({ error: "The PDF is not there" }, 404);
 }
 
-/** The page's requests, answered from the store and the header images. */
+/**
+ * The page's requests, answered from the store and the header images. A
+ * rename goes to the filer once the decisions before it have.
+ */
 export function handler(
   store: Store,
   headers: Map<string, Uint8Array<ArrayBuffer>>,
+  rename: (names: string[], sender: string) => Promise<void>,
 ): (req: Request) => Promise<Response> {
   const sorted = () =>
     store.letters().sort((a, b) =>
@@ -144,6 +148,20 @@ export function handler(
       } catch (error) {
         return json({ error: (error as Error).message }, 422);
       }
+    }
+    if (req.method === "POST" && url.pathname === "/api/rename") {
+      const body = await req.json() as { names: string[]; sender: string };
+      if (String(body.sender ?? "").trim() === "") {
+        return json({ error: "The sender's name cannot be empty" }, 422);
+      }
+      await store.idle();
+      try {
+        await rename(body.names, body.sender);
+      } catch (error) {
+        return json({ error: (error as Error).message }, 422);
+      }
+      await store.refresh();
+      return json(sorted());
     }
     if (parts[0] === "api" && parts[1] === "letters" && parts[2]) {
       const letter = LETTER.test(parts[2]) ? store.get(parts[2]) : undefined;
@@ -223,17 +241,20 @@ export const behavior = {
           );
         };
         // Through the CLI: runModel allows 100 calls per method run.
-        const run = async (decisions: Decision[]): Promise<void> => {
+        const runFiler = async (
+          method: string,
+          input: Record<string, unknown>,
+        ): Promise<void> => {
           const { code, stdout, stderr } = await new Deno.Command("swamp", {
             args: [
               "behavior",
               "run",
               filer,
-              "decide",
+              method,
               // A person's text is data, never an expression or an @file.
               "--literal-inputs",
               "--input",
-              JSON.stringify({ decisions }),
+              JSON.stringify(input),
               "--json",
             ],
             cwd: context.repoDir,
@@ -247,6 +268,10 @@ export const behavior = {
             );
           }
         };
+        const run = (decisions: Decision[]) =>
+          runFiler("decide", { decisions });
+        const rename = (letters: string[], sender: string) =>
+          runFiler("renameSender", { letters, sender });
         const store = new Store(run, load);
 
         const headers = new Map<string, Uint8Array<ArrayBuffer>>();
@@ -296,7 +321,7 @@ export const behavior = {
           );
         }, REFRESH_MS);
 
-        const handle = handler(store, headers);
+        const handle = handler(store, headers, rename);
         const server = Deno.serve({
           hostname: "127.0.0.1",
           port,

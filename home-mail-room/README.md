@@ -186,6 +186,30 @@ person decided it. Its latest version is the log of what has been filed:
 swamp report get @zts/home-mail-room/letters --behavior filer
 ```
 
+### Renaming a sender
+
+Each sender in the list has a **Rename** button. It renames the sender on every
+open letter in the group, and on any other open letter whose sender was read the
+same way, and remembers the rename in the cabinet's `senders.yaml`, so letters
+from that sender get the name from then on:
+
+```yaml
+# FileCabinet/senders.yaml
+"The Dextrous Web Ltd, trading as dxw digital": dxw digital
+EDF ENERGY: EDF Energy
+```
+
+The left side is the sender as read, with case and spacing ignored; the right is
+the name used as written, with no change of case. Edit the file by hand too, but
+the page rewrites it when it adds a rename, without your comments. A letter
+renamed to a sender with a cabinet folder is filed by the next `fileReady`. Run
+it without the page:
+
+```sh
+swamp behavior run filer renameSender --literal-inputs --input \
+  '{"letters":["letter-0123456789abcdef"],"sender":"dxw digital"}'
+```
+
 To decide without the page:
 
 ```sh

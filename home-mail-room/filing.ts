@@ -139,7 +139,7 @@ export function senderName(raw: string): string {
 }
 
 /** Key a sender is compared by: cleaned, case and spacing ignored. */
-function senderKey(name: string): string {
+export function senderKey(name: string): string {
   return cleanSegment(name).toLowerCase();
 }
 

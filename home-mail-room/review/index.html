@@ -142,8 +142,12 @@
       border-top: none;
       margin-top: 0;
     }
-    li.group .bulk {
+    li.group .actions {
       margin-left: auto;
+      display: flex;
+      gap: 6px;
+    }
+    li.group button {
       font: inherit;
       font-size: 12px;
       font-weight: 500;
@@ -514,13 +518,12 @@
         if (filter === "open" && senderOf(l) !== lastSender) {
           lastSender = senderOf(l);
           const n = items.filter((x) => senderOf(x) === lastSender).length;
-          group = `<li class="group">${esc(lastSender)}${
+          const sender = esc(lastSender);
+          group = `<li class="group">${sender}<span class="actions">${
             n > 1 && l.proposal?.sender
-              ? ` <button type="button" class="bulk" data-sender="${
-                esc(lastSender)
-              }">File all ${n}</button>`
+              ? `<button type="button" class="bulk" data-sender="${sender}">File all ${n}</button>`
               : ""
-          }</li>`;
+          }<button type="button" class="rename" data-sender="${sender}" title="Rename this sender, now and for future letters">Rename</button></span></li>`;
         }
         return `${group}<li data-name="${l.name}" aria-selected="${
           l.name === selected
@@ -785,6 +788,32 @@
       schedulePoll(1000);
     }
 
+    /** Rename one sender's open letters, and future letters read the same way. */
+    async function renameSender(sender) {
+      const group = visible().filter((l) => senderOf(l) === sender);
+      const known = group[0]?.proposal?.sender ?? "";
+      const to = prompt(
+        `Rename "${sender}" on ${group.length} letter${
+          group.length === 1 ? "" : "s"
+        }. Letters from this sender that come later get this name too.`,
+        known,
+      )?.trim();
+      if (!to || to === known) return;
+      toast(`Renaming ${sender}…`);
+      const res = await fetch("/api/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ names: group.map((l) => l.name), sender: to }),
+      });
+      const out = await res.json();
+      if (!res.ok) {
+        toast(`Not renamed: ${out.error}`);
+        return;
+      }
+      toast(`Renamed ${sender} to ${to}`);
+      setLetters(out);
+    }
+
     function file(e) {
       e?.preventDefault();
       if (!$("fileBtn") || $("fileBtn").disabled) return;
@@ -804,6 +833,8 @@
     $("queue").addEventListener("click", (e) => {
       const bulk = e.target.closest(".bulk");
       if (bulk) return fileAll(bulk.dataset.sender);
+      const rename = e.target.closest(".rename");
+      if (rename) return renameSender(rename.dataset.sender);
       select(e.target.closest("li[data-name]")?.dataset.name);
     });
     document.querySelectorAll("[data-filter]").forEach((b) =>
