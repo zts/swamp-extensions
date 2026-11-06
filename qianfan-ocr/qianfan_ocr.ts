@@ -234,12 +234,18 @@ async function isFile(path: string): Promise<boolean> {
 /** The @zts/qianfan-ocr behavior. */
 export const behavior = {
   type: "@zts/qianfan-ocr",
-  version: "2026.11.03.1",
+  version: "2026.11.06.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
       toVersion: "2026.11.03.1",
       description: "Adds extractBatch; no global argument changes",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.06.1",
+      description:
+        "Adds stop and lockTimeoutSeconds; no global argument changes",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@zts/qianfan-ocr"
-version: "2026.11.03.1"
+version: "2026.11.06.1"
 license: MIT
 repository: https://github.com/zts/swamp-extensions
 description: >-
@@ -10,7 +10,8 @@ description: >-
   pinned revision ahead of time; extract reads one image and never downloads,
   so a run never stalls on a multi-GB fetch; extractBatch reads many images
   with one load of the model. Runs on Apple silicon (MPS),
-  CUDA or CPU, and takes turns on the model across the machine. Needs uv.
+  CUDA or CPU, and takes turns on the model across the machine; the helper
+  exits when swamp does, and stop stops one left holding the model. Needs uv.
 paths:
   base: manifest
 behaviors:
