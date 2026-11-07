@@ -463,8 +463,16 @@ async function fileLetter(
 /** The @zts/home-mail-room/filer behavior. */
 export const behavior = {
   type: "@zts/home-mail-room/filer",
-  version: "2026.11.06.1",
+  version: "2026.11.07.1",
   globalArguments: GlobalArgsSchema,
+  // Instances made before the first release, at 2026.11.06.1.
+  upgrades: [
+    {
+      toVersion: "2026.11.07.1",
+      description: "First published release; no global argument changes",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   // After every run, including each decide the review page makes.
   reports: ["@zts/home-mail-room/letters"],
   resources: {

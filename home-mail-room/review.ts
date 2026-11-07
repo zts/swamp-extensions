@@ -325,8 +325,17 @@ export async function runFilerMethod(
 /** The @zts/home-mail-room/review behavior. */
 export const behavior = {
   type: "@zts/home-mail-room/review",
-  version: "2026.11.06.1",
+  version: "2026.11.07.1",
   globalArguments: GlobalArgsSchema,
+  // Instances made before the first release, at 2026.11.06.1.
+  upgrades: [
+    {
+      toVersion: "2026.11.07.1",
+      description:
+        "Refuses other hosts and origins and non-JSON POSTs; no global argument changes",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   methods: {
     serve: {
       description:

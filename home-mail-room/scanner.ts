@@ -480,8 +480,16 @@ function detailsFrom(
 /** The @zts/home-mail-room/scanner behavior. */
 export const behavior = {
   type: "@zts/home-mail-room/scanner",
-  version: "2026.11.06.1",
+  version: "2026.11.07.1",
   globalArguments: GlobalArgsSchema,
+  // Instances made before the first release, at 2026.11.06.1.
+  upgrades: [
+    {
+      toVersion: "2026.11.07.1",
+      description: "First published release; no global argument changes",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   resources: {
     "details": {
       description:
