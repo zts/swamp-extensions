@@ -300,7 +300,13 @@ export const behavior = {
           "install",
           `--model=${a.model}`,
           `--revision=${a.revision}`,
-        ], { offline: false, onStderr: logHelper(context) });
+        ], {
+          offline: false,
+          onStderr: logHelper(context),
+          // A line per redraw of every file's download bar would bury the
+          // log; the helper already logs which model it downloads.
+          quietDownloads: true,
+        });
         const modelAlreadyCached = result.modelAlreadyCached === true;
         const handle = await context.writeResource("install", "install", {
           model: a.model,

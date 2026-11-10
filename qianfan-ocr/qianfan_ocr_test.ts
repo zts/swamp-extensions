@@ -262,6 +262,27 @@ Deno.test("install looks for the environment before uv builds it", async () => {
   );
 });
 
+Deno.test("install turns Hugging Face download bars off, and extract leaves the model's load bar on", async () => {
+  await withFixture(
+    { FAKE_UV_STDOUT: JSON.stringify(EXTRACTED) },
+    async (f) => {
+      await call(f, "install", {});
+      await call(f, "extract", {
+        imagePath: "scans/My Scan (1).png",
+        prompt: "Read the title",
+      });
+      const runs = (await fakeUvCalls(f.fake)).filter((c) =>
+        c.argv[0] === "run"
+      );
+      const [install, extract] = runs;
+      assertEquals(install.argv.includes("install"), true);
+      assertEquals(extract.argv.includes("extract"), true);
+      assertEquals(install.HF_HUB_DISABLE_PROGRESS_BARS, "1");
+      assertEquals(extract.HF_HUB_DISABLE_PROGRESS_BARS, null);
+    },
+  );
+});
+
 Deno.test("install and extract each log when they finish", async () => {
   await withFixture(
     { FAKE_UV_STDOUT: JSON.stringify(EXTRACTED) },
