@@ -238,6 +238,24 @@ Deno.test("a helper that dies after starting is not blamed on a missing install"
   });
 });
 
+Deno.test("a helper that dies after a carriage-return progress bar fails with one line per redraw", async () => {
+  await withFakeUv({ FAKE_UV_RUN: "progress-then-crash" }, async (fake) => {
+    const error = await assertRejects(() =>
+      runHelper(settings(fake.uvPath), SCRIPT, ["extract"], { offline: true })
+    );
+    assertEquals(
+      (error as Error).message,
+      [
+        "qianfan_ocr.py extract failed (exit 137):",
+        STARTED,
+        "Loading weights:   0%|          | 0/745 [00:00<?, ?it/s]",
+        "Loading weights: 100%|##########| 745/745 [00:02<00:00]",
+        "Killed: 9",
+      ].join("\n"),
+    );
+  });
+});
+
 Deno.test("output that is not one JSON object is an error", async () => {
   await withFakeUv({ FAKE_UV_RUN: "garbage" }, async (fake) => {
     const error = await assertRejects(() =>

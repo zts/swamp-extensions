@@ -130,8 +130,13 @@ export async function environmentExists(
   return code === 0 && stdout.includes("/environments-v2/");
 }
 
+/**
+ * The last non-blank lines of a stream's text, split as readLines splits
+ * them, so each redraw of a \r progress bar is a line of its own.
+ */
 function tail(text: string, lines = 20): string {
-  return text.trim().split("\n").slice(-lines).join("\n");
+  return text.split(/\r\n|\r|\n/).filter((line) => line.trim())
+    .map((line) => line.trimEnd()).slice(-lines).join("\n");
 }
 
 function jsonObject(text: string): Record<string, unknown> | null {

@@ -10,9 +10,11 @@
 //   FAKE_UV_ENV     "present" (default) | "absent": what python find prints
 //   FAKE_UV_RUN     "ok" (default) | "uv-fail" | "helper-error" | "crash" |
 //                   "garbage" | "hang" | "lines-then-crash" | "torn" |
-//                   "hold" | "orphan" | "progress": how run behaves.
-//                   "progress" draws a tqdm-style bar redrawn with \r, whose
-//                   closing \r and \n go out as two writes. "hold" waits for
+//                   "hold" | "orphan" | "progress" | "progress-then-crash":
+//                   how run behaves. "progress" draws a tqdm-style bar
+//                   redrawn with \r, whose closing \r and \n go out as two
+//                   writes; "progress-then-crash" draws a bar the way tqdm
+//                   does, each redraw after its \r, then dies. "hold" waits for
 //                   stdin to close; "orphan" exits at once, leaving a child
 //                   that holds stdout open until stdin closes, as a Python
 //                   that outlived uv would. Both write FAKE_UV_PIDFILE (the
@@ -85,6 +87,14 @@ switch (env("FAKE_UV_RUN") ?? "ok") {
     err("model loaded\n");
     out("{}\n");
     Deno.exit(0);
+    break;
+  case "progress-then-crash":
+    err(`${STARTED}\n`);
+    err("\rLoading weights:   0%|          | 0/745 [00:00<?, ?it/s]");
+    err("\rLoading weights: 100%|##########| 745/745 [00:02<00:00]");
+    err("\n");
+    err("Killed: 9\n");
+    Deno.exit(137);
     break;
   case "uv-fail":
     err(
