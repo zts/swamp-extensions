@@ -229,7 +229,7 @@ async function isFile(path: string): Promise<boolean> {
 /** The @zts/qianfan-ocr behavior. */
 export const behavior = {
   type: "@zts/qianfan-ocr",
-  version: "2026.11.06.2",
+  version: "2026.11.10.1",
   globalArguments: GlobalArgsSchema,
   upgrades: [
     {
@@ -247,6 +247,12 @@ export const behavior = {
       toVersion: "2026.11.06.2",
       description:
         "Logs the helper's stderr line by line; no global argument changes",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.11.10.1",
+      description:
+        "Logs each redraw of a progress bar as its own line and leaves download bars out of install's log; no global argument changes",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],
@@ -300,7 +306,13 @@ export const behavior = {
           "install",
           `--model=${a.model}`,
           `--revision=${a.revision}`,
-        ], { offline: false, onStderr: logHelper(context) });
+        ], {
+          offline: false,
+          onStderr: logHelper(context),
+          // A line per redraw of every file's download bar would bury the
+          // log; the helper already logs which model it downloads.
+          quietDownloads: true,
+        });
         const modelAlreadyCached = result.modelAlreadyCached === true;
         const handle = await context.writeResource("install", "install", {
           model: a.model,

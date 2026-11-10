@@ -91,6 +91,37 @@ Deno.test("runHelper hands on each stderr line while the helper is still running
   });
 });
 
+Deno.test("runHelper hands on each redraw of a carriage-return progress bar as its own line", async () => {
+  await withFakeUv({ FAKE_UV_RUN: "progress" }, async (fake) => {
+    const seen: string[] = [];
+    await runHelper(settings(fake.uvPath), SCRIPT, ["extract"], {
+      offline: true,
+      onStderr: (line) => seen.push(line),
+    });
+    assertEquals(seen, [
+      STARTED,
+      "Loading weights:   0%|          | 0/745 [00:00<?, ?it/s]",
+      "Loading weights: 100%|##########| 745/745 [00:02<00:00]",
+      "model loaded",
+    ]);
+  });
+});
+
+Deno.test("runHelper turns Hugging Face progress bars off only when asked for quiet downloads", async () => {
+  await withFakeUv({}, async (fake) => {
+    await runHelper(settings(fake.uvPath), SCRIPT, ["install"], {
+      offline: false,
+      quietDownloads: true,
+    });
+    await runHelper(settings(fake.uvPath), SCRIPT, ["install"], {
+      offline: false,
+    });
+    const [quiet, loud] = await fakeUvCalls(fake);
+    assertEquals(quiet.HF_HUB_DISABLE_PROGRESS_BARS, "1");
+    assertEquals(loud.HF_HUB_DISABLE_PROGRESS_BARS, null);
+  });
+});
+
 Deno.test("runHelper hands on the helper's stderr when the helper fails", async () => {
   await withFakeUv({ FAKE_UV_RUN: "helper-error" }, async (fake) => {
     const seen: string[] = [];
@@ -204,6 +235,24 @@ Deno.test("a helper that dies after starting is not blamed on a missing install"
     assertStringIncludes(message, "qianfan_ocr.py extract failed (exit 137)");
     assertStringIncludes(message, "Killed: 9");
     assertEquals(message.includes("run install"), false);
+  });
+});
+
+Deno.test("a helper that dies after a carriage-return progress bar fails with one line per redraw", async () => {
+  await withFakeUv({ FAKE_UV_RUN: "progress-then-crash" }, async (fake) => {
+    const error = await assertRejects(() =>
+      runHelper(settings(fake.uvPath), SCRIPT, ["extract"], { offline: true })
+    );
+    assertEquals(
+      (error as Error).message,
+      [
+        "qianfan_ocr.py extract failed (exit 137):",
+        STARTED,
+        "Loading weights:   0%|          | 0/745 [00:00<?, ?it/s]",
+        "Loading weights: 100%|##########| 745/745 [00:02<00:00]",
+        "Killed: 9",
+      ].join("\n"),
+    );
   });
 });
 

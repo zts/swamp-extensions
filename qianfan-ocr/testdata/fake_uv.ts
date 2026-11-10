@@ -4,12 +4,18 @@
 //
 // Controls, read from the environment the test's shim sets:
 //   FAKE_UV_CALLS   file to append each invocation to, as a JSON line of
-//                   {argv, HF_HOME, HF_HUB_OFFLINE, requests}, where requests
+//                   {argv, HF_HOME, HF_HUB_OFFLINE,
+//                   HF_HUB_DISABLE_PROGRESS_BARS, requests}, where requests
 //                   is the first line of stdin, parsed, for extract-batch
 //   FAKE_UV_ENV     "present" (default) | "absent": what python find prints
 //   FAKE_UV_RUN     "ok" (default) | "uv-fail" | "helper-error" | "crash" |
 //                   "garbage" | "hang" | "lines-then-crash" | "torn" |
-//                   "hold" | "orphan": how run behaves. "hold" waits for
+//                   "hold" | "orphan" | "progress" | "progress-then-crash":
+//                   how run behaves. "progress" draws a bar the way tqdm
+//                   does, each redraw after its \r and the last ended by \n,
+//                   in writes that reach the reader apart, then ends a line
+//                   with a \r and a \n written apart; "progress-then-crash"
+//                   draws the same bar, then dies. "hold" waits for
 //                   stdin to close; "orphan" exits at once, leaving a child
 //                   that holds stdout open until stdin closes, as a Python
 //                   that outlived uv would. Both write FAKE_UV_PIDFILE (the
@@ -40,6 +46,7 @@ if (calls) {
       argv: args,
       HF_HOME: env("HF_HOME") ?? null,
       HF_HUB_OFFLINE: env("HF_HUB_OFFLINE") ?? null,
+      HF_HUB_DISABLE_PROGRESS_BARS: env("HF_HUB_DISABLE_PROGRESS_BARS") ?? null,
       requests: requestsLine ? JSON.parse(requestsLine) : null,
     }) + "\n",
     { append: true },
@@ -70,6 +77,29 @@ switch (env("FAKE_UV_RUN") ?? "ok") {
     err(`${STARTED}\nloading model\n`);
     out(`${env("FAKE_UV_STDOUT") ?? "{}"}\n`);
     Deno.exit(0);
+    break;
+  case "progress":
+    err(`${STARTED}\n`);
+    // Each redraw waits, unended, for the \r that starts the next.
+    err("\rLoading weights:   0%|          | 0/745 [00:00<?, ?it/s]");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    err("\rLoading weights: 100%|##########| 745/745 [00:02<00:00]");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    err("\n");
+    // A \r\n whose \r and \n reach the reader apart.
+    err("model loaded\r");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    err("\n");
+    out("{}\n");
+    Deno.exit(0);
+    break;
+  case "progress-then-crash":
+    err(`${STARTED}\n`);
+    err("\rLoading weights:   0%|          | 0/745 [00:00<?, ?it/s]");
+    err("\rLoading weights: 100%|##########| 745/745 [00:02<00:00]");
+    err("\n");
+    err("Killed: 9\n");
+    Deno.exit(137);
     break;
   case "uv-fail":
     err(
