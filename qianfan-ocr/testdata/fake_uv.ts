@@ -4,12 +4,15 @@
 //
 // Controls, read from the environment the test's shim sets:
 //   FAKE_UV_CALLS   file to append each invocation to, as a JSON line of
-//                   {argv, HF_HOME, HF_HUB_OFFLINE, requests}, where requests
+//                   {argv, HF_HOME, HF_HUB_OFFLINE,
+//                   HF_HUB_DISABLE_PROGRESS_BARS, requests}, where requests
 //                   is the first line of stdin, parsed, for extract-batch
 //   FAKE_UV_ENV     "present" (default) | "absent": what python find prints
 //   FAKE_UV_RUN     "ok" (default) | "uv-fail" | "helper-error" | "crash" |
 //                   "garbage" | "hang" | "lines-then-crash" | "torn" |
-//                   "hold" | "orphan": how run behaves. "hold" waits for
+//                   "hold" | "orphan" | "progress": how run behaves.
+//                   "progress" draws a tqdm-style bar redrawn with \r, whose
+//                   closing \r and \n go out as two writes. "hold" waits for
 //                   stdin to close; "orphan" exits at once, leaving a child
 //                   that holds stdout open until stdin closes, as a Python
 //                   that outlived uv would. Both write FAKE_UV_PIDFILE (the
@@ -40,6 +43,7 @@ if (calls) {
       argv: args,
       HF_HOME: env("HF_HOME") ?? null,
       HF_HUB_OFFLINE: env("HF_HUB_OFFLINE") ?? null,
+      HF_HUB_DISABLE_PROGRESS_BARS: env("HF_HUB_DISABLE_PROGRESS_BARS") ?? null,
       requests: requestsLine ? JSON.parse(requestsLine) : null,
     }) + "\n",
     { append: true },
@@ -69,6 +73,17 @@ switch (env("FAKE_UV_RUN") ?? "ok") {
   case "ok":
     err(`${STARTED}\nloading model\n`);
     out(`${env("FAKE_UV_STDOUT") ?? "{}"}\n`);
+    Deno.exit(0);
+    break;
+  case "progress":
+    err(`${STARTED}\n`);
+    err("Loading weights:   0%|          | 0/745 [00:00<?, ?it/s]\r");
+    err("Loading weights: 100%|##########| 745/745 [00:02<00:00]\r");
+    // The bar's last \r and the \n that ends it reach the reader apart.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    err("\n");
+    err("model loaded\n");
+    out("{}\n");
     Deno.exit(0);
     break;
   case "uv-fail":

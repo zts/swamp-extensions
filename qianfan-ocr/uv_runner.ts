@@ -24,12 +24,22 @@ export interface RunOptions {
   onStderr?: (line: string) => void;
   /** Written to the helper's stdin, e.g. extract-batch's requests line. */
   stdin?: string;
+  /**
+   * Turn off Hugging Face's download progress bars, which would otherwise
+   * log a line per redraw of each file's bar.
+   */
+  quietDownloads?: boolean;
 }
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
-/** All of a stream's text, handing on each non-blank line as it arrives. */
+/**
+ * All of a stream's text, handing on each non-blank line as it arrives. A
+ * line ends at \n, \r\n or a lone \r, so each redraw of a progress bar
+ * drawn with \r is its own line. A \r\n split across two reads leaves an
+ * empty line between them, which is dropped as blank.
+ */
 async function readLines(
   stream: ReadableStream<Uint8Array>,
   onLine?: (line: string) => void,
@@ -38,7 +48,7 @@ async function readLines(
   let pending = "";
   for await (const chunk of stream.pipeThrough(new TextDecoderStream())) {
     text += chunk;
-    const lines = (pending + chunk).split("\n");
+    const lines = (pending + chunk).split(/\r\n|\r|\n/);
     pending = lines.pop()!;
     for (const line of lines) if (line.trim()) onLine?.(line.trimEnd());
   }
@@ -140,11 +150,12 @@ async function uvRun(
   settings: UvSettings,
   script: string,
   args: string[],
-  { offline, onStderr, stdin }: RunOptions,
+  { offline, onStderr, stdin, quietDownloads }: RunOptions,
 ) {
   const env: Record<string, string> = {};
   if (settings.hfHome) env.HF_HOME = settings.hfHome;
   if (offline) env.HF_HUB_OFFLINE = "1";
+  if (quietDownloads) env.HF_HUB_DISABLE_PROGRESS_BARS = "1";
   const run = await uv(
     settings,
     [
