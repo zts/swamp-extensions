@@ -11,10 +11,11 @@
 //   FAKE_UV_RUN     "ok" (default) | "uv-fail" | "helper-error" | "crash" |
 //                   "garbage" | "hang" | "lines-then-crash" | "torn" |
 //                   "hold" | "orphan" | "progress" | "progress-then-crash":
-//                   how run behaves. "progress" draws a tqdm-style bar
-//                   redrawn with \r, whose closing \r and \n go out as two
-//                   writes; "progress-then-crash" draws a bar the way tqdm
-//                   does, each redraw after its \r, then dies. "hold" waits for
+//                   how run behaves. "progress" draws a bar the way tqdm
+//                   does, each redraw after its \r and the last ended by \n,
+//                   in writes that reach the reader apart, then ends a line
+//                   with a \r and a \n written apart; "progress-then-crash"
+//                   draws the same bar, then dies. "hold" waits for
 //                   stdin to close; "orphan" exits at once, leaving a child
 //                   that holds stdout open until stdin closes, as a Python
 //                   that outlived uv would. Both write FAKE_UV_PIDFILE (the
@@ -79,12 +80,16 @@ switch (env("FAKE_UV_RUN") ?? "ok") {
     break;
   case "progress":
     err(`${STARTED}\n`);
-    err("Loading weights:   0%|          | 0/745 [00:00<?, ?it/s]\r");
-    err("Loading weights: 100%|##########| 745/745 [00:02<00:00]\r");
-    // The bar's last \r and the \n that ends it reach the reader apart.
+    // Each redraw waits, unended, for the \r that starts the next.
+    err("\rLoading weights:   0%|          | 0/745 [00:00<?, ?it/s]");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    err("\rLoading weights: 100%|##########| 745/745 [00:02<00:00]");
     await new Promise((resolve) => setTimeout(resolve, 200));
     err("\n");
-    err("model loaded\n");
+    // A \r\n whose \r and \n reach the reader apart.
+    err("model loaded\r");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    err("\n");
     out("{}\n");
     Deno.exit(0);
     break;
