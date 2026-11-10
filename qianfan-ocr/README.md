@@ -114,7 +114,10 @@ wrote; anything else is not this batch's result.
   their `ocr` records, the rest are `notRun` on the batch record, and the run
   ends cancelled.
 - **Progress shows as it goes.** Each line the helper writes to stderr, such as
-  "item i of n", is logged as soon as it is written.
+  "item i of n", is logged as soon as it is written. A progress bar redrawn in
+  place, such as the model's "Loading weights", logs one line per redraw.
+  `install` turns Hugging Face's download bars off, so its log says which model
+  it downloads but not how far along it is.
 - **A batch holds the model for its whole run.** Other runs of `extract` or
   `extractBatch` on this machine wait until it ends, however long it is, unless
   they set `lockTimeoutSeconds` (below).
