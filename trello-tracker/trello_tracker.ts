@@ -7,6 +7,9 @@
  * (TRACKERS.md in @swamp/stagecraft) and is placed behind a
  * `@swamp/stagecraft/publisher`.
  *
+ * Beyond the contract, `set_title` and `set_body` change a card's name and
+ * description. stagecraft never calls them; people run them through `operate`.
+ *
  * @module
  */
 import { z } from "npm:zod@4.6.7";
@@ -49,6 +52,8 @@ const OPERATIONS = [
   "set_status",
   "relate",
   "unrelate",
+  "set_title",
+  "set_body",
   "post_entry",
   "set_type",
   "assign",
@@ -461,6 +466,8 @@ async function perform(
     case "set_status":
     case "relate":
     case "unrelate":
+    case "set_title":
+    case "set_body":
       break;
     default:
       throw new Failure(
@@ -475,6 +482,13 @@ async function perform(
     withinLimit(text("title"), "the title");
     withinLimit(text("body"), "the body");
   }
+  if (operation === "set_title") {
+    withinLimit(text("title"), "the title");
+    if (text("title").trim() === "") {
+      throw new Failure("invalid", "set_title needs a non-empty title");
+    }
+  }
+  if (operation === "set_body") withinLimit(text("body"), "the body");
   let relationType: Relation["type"] | undefined;
   if (operation === "relate" || operation === "unrelate") {
     const parsedType = z.enum(RELATION_TYPES).safeParse(request.type);
@@ -573,6 +587,29 @@ async function perform(
         });
       }
       return { changed, status: { id: list.id, name: list.name ?? "" } };
+    }
+    // Both write only when the value differs, so a retry reports no change.
+    case "set_title": {
+      const title = text("title");
+      const card = await board.card(text("issue"));
+      const changed = card.name !== title;
+      if (changed) {
+        await http("other", "PUT", `/cards/${card.id}`, {
+          body: { name: title },
+        });
+      }
+      return { changed, title };
+    }
+    case "set_body": {
+      const body = text("body");
+      const card = await board.card(text("issue"));
+      const changed = card.desc !== body;
+      if (changed) {
+        await http("other", "PUT", `/cards/${card.id}`, {
+          body: { desc: body },
+        });
+      }
+      return { changed };
     }
     default: {
       const type = relationType!;
@@ -688,8 +725,15 @@ const AnswerSchema = z.discriminatedUnion("ok", [
 /** The Trello tracker: a stagecraft tracker that keeps tickets on a board. */
 export const behavior = {
   type: "@zts/trello-tracker",
-  version: "2026.10.25.1",
+  version: "2026.11.12.1",
   globalArguments: GlobalArgsSchema,
+  upgrades: [
+    {
+      toVersion: "2026.11.12.1",
+      description: "Adds set_title and set_body; no global argument changes",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   resources: {
     relations: {
       description: "Each card's relations, which Trello cannot hold itself",
