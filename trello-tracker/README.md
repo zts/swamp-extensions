@@ -27,19 +27,25 @@ stagecraft's tracker contract 1 and sits behind a
 ## Changing a card's title or description
 
 Run them through `operate`, naming the answer afresh each time (answer names
-start with `answer-`):
+start with `answer-`). Pass `--literal-inputs` whenever the request carries free
+text, so swamp takes it as written: without it, text starting with `@` is read
+as a file path.
 
 ```sh
-swamp model method run trello operate --input operation=set_title \
+swamp model method run trello operate --literal-inputs \
+  --input operation=set_title \
   --input 'request:json={"issue":"trello-19","title":"The right name"}' \
   --input answer=answer-retitle-trello-19
-swamp model method run trello operate --input operation=set_body \
+swamp model method run trello operate --literal-inputs \
+  --input operation=set_body \
   --input 'request:json={"issue":"trello-19","body":"## Notes\n- one"}' \
   --input answer=answer-rewrite-trello-19
 ```
 
 `set_title` answers `{changed, title}` and `set_body` answers `{changed}`. Each
-writes only when the value differs, so running one again reports
+writes only when the value differs, and `title` is the name Trello stored, which
+may differ from the one sent if Trello normalises it. `changed` compares what
+Trello stored with what the card held before, so running one again reports
 `changed: false`. A title must not be empty; an empty body clears the
 description. Both refuse text longer than Trello's 16384 characters.
 

@@ -60,6 +60,8 @@ class FakeTrello {
   requests: { method: string; url: URL; auth: string | null; body: unknown }[] =
     [];
   boardStatus = 200;
+  /** How Trello stores a name or description it is sent; verbatim unless a test says otherwise. */
+  stores = (value: string) => value;
   overrides: ((req: Request, url: URL) => Response | undefined)[] = [];
 
   card(id: string, n: number, shortLink: string, name: string): FakeCard {
@@ -177,8 +179,8 @@ class FakeTrello {
       );
       if (req.method === "PUT" && card) {
         if ("idList" in body) card.idList = body.idList;
-        if ("name" in body) card.name = body.name;
-        if ("desc" in body) card.desc = body.desc;
+        if ("name" in body) card.name = this.stores(body.name);
+        if ("desc" in body) card.desc = this.stores(body.desc);
       }
       return found(card);
     }
@@ -653,6 +655,40 @@ Deno.test("set_body with an empty body clears a description that has text", asyn
   );
   assertEquals(again.result, { changed: false });
   assertEquals(puts(fake).length, 1);
+});
+
+Deno.test("set_title reports the name Trello stored, and a retry settles on no change", async () => {
+  const fake = new FakeTrello();
+  fake.stores = (value) => value.trim();
+  const { operate } = tracker();
+  const first = await run(
+    fake,
+    () => operate("set_title", { issue: CARD, title: "  Padded  " }),
+  );
+  assertEquals(first.result, { changed: true, title: "Padded" });
+  assertEquals(fake.cards[0].name, "Padded");
+  const retry = await run(
+    fake,
+    () => operate("set_title", { issue: CARD, title: "  Padded  " }),
+  );
+  assertEquals(retry.result, { changed: false, title: "Padded" });
+});
+
+Deno.test("set_body settles on no change when Trello normalises the description", async () => {
+  const fake = new FakeTrello();
+  fake.stores = (value) => value.replaceAll("\r\n", "\n");
+  const { operate } = tracker();
+  const first = await run(
+    fake,
+    () => operate("set_body", { issue: CARD, body: "one\r\ntwo" }),
+  );
+  assertEquals(first.result, { changed: true });
+  assertEquals(fake.cards[0].desc, "one\ntwo");
+  const retry = await run(
+    fake,
+    () => operate("set_body", { issue: CARD, body: "one\r\ntwo" }),
+  );
+  assertEquals(retry.result, { changed: false });
 });
 
 for (const title of ["", "   ", "\n\t"]) {

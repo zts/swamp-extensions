@@ -588,28 +588,34 @@ async function perform(
       }
       return { changed, status: { id: list.id, name: list.name ?? "" } };
     }
-    // Both write only when the value differs, so a retry reports no change.
+    // Both write only when the value differs, and report what Trello stored:
+    // changed compares it with the card before, so when Trello normalises the
+    // value (trims a name, say) a retry still reports no change.
     case "set_title": {
       const title = text("title");
       const card = await board.card(text("issue"));
-      const changed = card.name !== title;
-      if (changed) {
+      if (card.name === title) return { changed: false, title };
+      const stored = parsed(
+        z.object({ name: z.string() }),
         await http("other", "PUT", `/cards/${card.id}`, {
           body: { name: title },
-        });
-      }
-      return { changed, title };
+        }),
+        `card ${card.id}`,
+      );
+      return { changed: stored.name !== card.name, title: stored.name };
     }
     case "set_body": {
       const body = text("body");
       const card = await board.card(text("issue"));
-      const changed = card.desc !== body;
-      if (changed) {
+      if (card.desc === body) return { changed: false };
+      const stored = parsed(
+        z.object({ desc: z.string() }),
         await http("other", "PUT", `/cards/${card.id}`, {
           body: { desc: body },
-        });
-      }
-      return { changed };
+        }),
+        `card ${card.id}`,
+      );
+      return { changed: stored.desc !== card.desc };
     }
     default: {
       const type = relationType!;
