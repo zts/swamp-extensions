@@ -20,6 +20,34 @@ stagecraft's tracker contract 1 and sits behind a
   duplicate chains.
 - No history, assign or pull-request capability: lifecycle entries arrive as
   comments.
+- Two operations of its own, outside the tracker contract, to fix a card by
+  hand: `set_title` (`{issue, title}`) changes its name, and `set_body`
+  (`{issue, body}`) its description, in markdown. stagecraft never calls them.
+
+## Changing a card's title or description
+
+Run them through `operate`, naming the answer afresh each time (answer names
+start with `answer-`). Pass `--literal-inputs` whenever the request carries free
+text, so swamp takes it as written: without it, text starting with `@` is read
+as a file path.
+
+```sh
+swamp model method run trello operate --literal-inputs \
+  --input operation=set_title \
+  --input 'request:json={"issue":"trello-19","title":"The right name"}' \
+  --input answer=answer-retitle-trello-19
+swamp model method run trello operate --literal-inputs \
+  --input operation=set_body \
+  --input 'request:json={"issue":"trello-19","body":"## Notes\n- one"}' \
+  --input answer=answer-rewrite-trello-19
+```
+
+`set_title` answers `{changed, title}` and `set_body` answers `{changed}`. Each
+writes only when the value differs, and `title` is the name Trello stored, which
+may differ from the one sent if Trello normalises it. `changed` compares what
+Trello stored with what the card held before, so running one again reports
+`changed: false`. A title must not be empty; an empty body clears the
+description. Both refuse text longer than Trello's 16384 characters.
 
 ## Setup
 
@@ -107,5 +135,8 @@ swamp workflow run @swamp/stagecraft/conformance --input tracker=trello-pub \
 - **Credentials stay in the header.** Requests send the key and token in an
   `Authorization: OAuth ...` header, never in the URL, and no answer, failure
   detail or log line contains them.
+- **A work item keeps the title it was claimed with.** stagecraft snapshots a
+  ticket's title when the work item is claimed, so after `set_title` the work
+  item shows the old title until its next `fetch_issue`.
 - **Rate limits** surface as `rate_limited`, with Trello's `Retry-After` value
   when it sends one.

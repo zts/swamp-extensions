@@ -60,6 +60,8 @@ class FakeTrello {
   requests: { method: string; url: URL; auth: string | null; body: unknown }[] =
     [];
   boardStatus = 200;
+  /** How Trello stores a name or description it is sent; verbatim unless a test says otherwise. */
+  stores = (value: string) => value;
   overrides: ((req: Request, url: URL) => Response | undefined)[] = [];
 
   card(id: string, n: number, shortLink: string, name: string): FakeCard {
@@ -176,7 +178,9 @@ class FakeTrello {
         c.id === m![1] || c.shortLink === m![1]
       );
       if (req.method === "PUT" && card) {
-        card.idList = body.idList;
+        if ("idList" in body) card.idList = body.idList;
+        if ("name" in body) card.name = this.stores(body.name);
+        if ("desc" in body) card.desc = this.stores(body.desc);
       }
       return found(card);
     }
@@ -298,6 +302,8 @@ const onIssue: [string, Record<string, unknown>][] = [
   ["fetch_issue", {}],
   ["comment", { body: "hi" }],
   ["set_status", { status: "In progress" }],
+  ["set_title", { title: "New title" }],
+  ["set_body", { body: "New body" }],
   ["relate", { type: "related_to", to: CARD_2 }],
 ];
 
@@ -344,7 +350,7 @@ Deno.test("a 401 on the card after the board read is not_found", async () => {
   assertEquals(fake.requests.some((r) => r.method !== "GET"), false);
 });
 
-Deno.test("comment and set_status never touch a card on another board", async () => {
+Deno.test("comment, set_status, set_title and set_body never touch a card on another board", async () => {
   const fake = new FakeTrello();
   const { operate } = tracker();
   const comment = await run(
@@ -355,10 +361,24 @@ Deno.test("comment and set_status never touch a card on another board", async ()
     fake,
     () => operate("set_status", { issue: FOREIGN, status: "In progress" }),
   );
+  const retitle = await run(
+    fake,
+    () => operate("set_title", { issue: FOREIGN, title: "Taken" }),
+  );
+  const rewrite = await run(
+    fake,
+    () => operate("set_body", { issue: FOREIGN, body: "Taken" }),
+  );
   assertEquals(comment.kind, "not_found");
   assertEquals(move.kind, "not_found");
+  assertEquals(retitle.kind, "not_found");
+  assertEquals(rewrite.kind, "not_found");
   assertEquals(fake.actions.length, 0);
-  assertEquals(fake.cards.find((c) => c.id === FOREIGN)!.idList, OPEN);
+  const foreign = fake.cards.find((c) => c.id === FOREIGN)!;
+  assertEquals(foreign.idList, OPEN);
+  assertEquals(foreign.name, "Elsewhere");
+  assertEquals(foreign.desc, "");
+  assertEquals(fake.requests.some((r) => r.method !== "GET"), false);
 });
 
 // --- board and credentials -----------------------------------------------------
@@ -517,8 +537,18 @@ Deno.test("text over Trello's limit is invalid, before any request", async () =>
     fake,
     () => operate("create", { title: "t", body: long, type: "fix" }),
   );
+  const title = await run(
+    fake,
+    () => operate("set_title", { issue: CARD, title: long }),
+  );
+  const body = await run(
+    fake,
+    () => operate("set_body", { issue: CARD, body: long }),
+  );
   assertEquals(comment.kind, "invalid");
   assertEquals(create.kind, "invalid");
+  assertEquals(title.kind, "invalid");
+  assertEquals(body.kind, "invalid");
   assertEquals(String(comment.detail).includes("16384"), true);
   assertEquals(fake.requests.length, 0);
 });
@@ -541,6 +571,158 @@ Deno.test("set_status moves the card, and reports no change when it is there", a
   );
   assertEquals((again.result as { changed: boolean }).changed, false);
 });
+
+/** The PUT requests made to Trello, with their bodies. */
+function puts(fake: FakeTrello) {
+  return fake.requests.filter((r) => r.method === "PUT").map((r) => ({
+    path: r.url.pathname,
+    body: r.body,
+  }));
+}
+
+Deno.test("set_title renames the card, and reports no change when it has the name", async () => {
+  const fake = new FakeTrello();
+  const { operate } = tracker();
+  const renamed = await run(
+    fake,
+    () => operate("set_title", { issue: "trello-1", title: "Better name" }),
+  );
+  assertEquals(renamed.result, { changed: true, title: "Better name" });
+  assertEquals(puts(fake), [
+    { path: `/1/cards/${CARD}`, body: { name: "Better name" } },
+  ]);
+  assertEquals(fake.cards[0].name, "Better name");
+  assertEquals(fake.cards[0].idList, OPEN);
+  const again = await run(
+    fake,
+    () => operate("set_title", { issue: CARD, title: "Better name" }),
+  );
+  assertEquals(again.result, { changed: false, title: "Better name" });
+  assertEquals(puts(fake).length, 1);
+  const ticket = await run(
+    fake,
+    () => operate("fetch_issue", { issue: CARD }),
+  );
+  assertEquals((ticket.result as { title: string }).title, "Better name");
+});
+
+Deno.test("set_body rewrites the description, and reports no change when it has it", async () => {
+  const fake = new FakeTrello();
+  const { operate } = tracker();
+  const written = await run(
+    fake,
+    () => operate("set_body", { issue: "c1Short1", body: "## Notes\n- one" }),
+  );
+  assertEquals(written.result, { changed: true });
+  assertEquals(puts(fake), [
+    { path: `/1/cards/${CARD}`, body: { desc: "## Notes\n- one" } },
+  ]);
+  assertEquals(fake.cards[0].desc, "## Notes\n- one");
+  assertEquals(fake.cards[0].name, "Fix it");
+  assertEquals(fake.cards[0].idList, OPEN);
+  const again = await run(
+    fake,
+    () => operate("set_body", { issue: CARD, body: "## Notes\n- one" }),
+  );
+  assertEquals(again.result, { changed: false });
+  assertEquals(puts(fake).length, 1);
+  const ticket = await run(
+    fake,
+    () => operate("fetch_issue", { issue: CARD }),
+  );
+  assertEquals(
+    (ticket.result as { description: string }).description,
+    "## Notes\n- one",
+  );
+});
+
+Deno.test("set_body with an empty body clears a description that has text", async () => {
+  const fake = new FakeTrello();
+  fake.cards[0].desc = "Old text";
+  const { operate } = tracker();
+  const cleared = await run(
+    fake,
+    () => operate("set_body", { issue: CARD, body: "" }),
+  );
+  assertEquals(cleared.result, { changed: true });
+  assertEquals(puts(fake), [
+    { path: `/1/cards/${CARD}`, body: { desc: "" } },
+  ]);
+  assertEquals(fake.cards[0].desc, "");
+  const again = await run(
+    fake,
+    () => operate("set_body", { issue: CARD, body: "" }),
+  );
+  assertEquals(again.result, { changed: false });
+  assertEquals(puts(fake).length, 1);
+});
+
+Deno.test("set_title reports the name Trello stored, and a retry settles on no change", async () => {
+  const fake = new FakeTrello();
+  fake.stores = (value) => value.trim();
+  const { operate } = tracker();
+  const first = await run(
+    fake,
+    () => operate("set_title", { issue: CARD, title: "  Padded  " }),
+  );
+  assertEquals(first.result, { changed: true, title: "Padded" });
+  assertEquals(fake.cards[0].name, "Padded");
+  const retry = await run(
+    fake,
+    () => operate("set_title", { issue: CARD, title: "  Padded  " }),
+  );
+  assertEquals(retry.result, { changed: false, title: "Padded" });
+});
+
+Deno.test("set_body settles on no change when Trello normalises the description", async () => {
+  const fake = new FakeTrello();
+  fake.stores = (value) => value.replaceAll("\r\n", "\n");
+  const { operate } = tracker();
+  const first = await run(
+    fake,
+    () => operate("set_body", { issue: CARD, body: "one\r\ntwo" }),
+  );
+  assertEquals(first.result, { changed: true });
+  assertEquals(fake.cards[0].desc, "one\ntwo");
+  const retry = await run(
+    fake,
+    () => operate("set_body", { issue: CARD, body: "one\r\ntwo" }),
+  );
+  assertEquals(retry.result, { changed: false });
+});
+
+for (const title of ["", "   ", "\n\t"]) {
+  Deno.test(`set_title refuses the title ${JSON.stringify(title)}, before any request`, async () => {
+    const fake = new FakeTrello();
+    const { operate } = tracker();
+    const answer = await run(
+      fake,
+      () => operate("set_title", { issue: CARD, title }),
+    );
+    assertEquals(answer.kind, "invalid");
+    assertEquals(answer.detail, "set_title needs a non-empty title");
+    assertEquals(fake.requests.length, 0);
+  });
+}
+
+for (
+  const [op, request] of [
+    ["set_title", { issue: CARD }],
+    ["set_title", { issue: CARD, title: 7 }],
+    ["set_body", { issue: CARD }],
+    ["set_body", { issue: CARD, body: null }],
+    ["set_title", { title: "No card" }],
+    ["set_body", { body: "No card" }],
+  ] as [string, Record<string, unknown>][]
+) {
+  Deno.test(`${op} of ${JSON.stringify(request)} is invalid, before any request`, async () => {
+    const fake = new FakeTrello();
+    const { operate } = tracker();
+    const answer = await run(fake, () => operate(op, request));
+    assertEquals(answer.kind, "invalid");
+    assertEquals(fake.requests.length, 0);
+  });
+}
 
 Deno.test("set_status ignores archived lists and names the open ones", async () => {
   const fake = new FakeTrello();
